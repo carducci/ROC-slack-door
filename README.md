@@ -1,6 +1,9 @@
-# ikigai-slack
+# ROC-slack-door
 
-Slack conversations as [ikigai](https://github.com/ikigai-rs) resources. A program names a
+A module for [ikigai](https://github.com/ikigai-rs), maintained by Michael Carducci. It isn't
+part of the ikigai-rs project; parts that prove themselves will be offered there.
+
+Slack conversations as resources, the resource-oriented (ROC) way. A program names a
 conversation, writes to it, reads it back, and finds people's replies waiting in an inbox; it
 does all of that with the same five verbs it uses for everything else. Channel ids, message
 timestamps, Socket Mode envelopes, retries, and rate limits stay behind the names, so a program
