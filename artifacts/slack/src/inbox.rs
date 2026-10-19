@@ -3,9 +3,15 @@
 //! by a Slack id, and a message outside any thread the door opened carries no key.
 
 use std::collections::BTreeSet;
+use std::fs;
+use std::io::{self, Write};
+use std::path::{Path, PathBuf};
 
 use crate::conversation::utc;
 use crate::{Event, SlackTransport, Threads};
+
+/// The file in the state directory that lists the ids of events already delivered.
+const DELIVERED_FILE: &str = "delivered.txt";
 
 /// One thing the inbox delivers.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -28,32 +34,63 @@ pub enum Delivery {
 }
 
 /// The filter between Slack's events and the inbox: only allowed people, in the configured
-/// channel, and never the door's own bot.
-#[derive(Debug, Clone)]
+/// channel, never the door's own bot, and each event at most once across restarts.
+#[derive(Debug)]
 pub struct Inbox {
     channel: String,
     bot_user: String,
     allowed: BTreeSet<String>,
+    state_file: PathBuf,
+    delivered: BTreeSet<String>,
 }
 
 impl Inbox {
     /// An inbox for `channel`, delivering only what the Slack users in `allowed` say, and never
-    /// what `bot_user` posts.
-    pub fn new<I, S>(channel: &str, bot_user: &str, allowed: I) -> Self
+    /// what `bot_user` posts. The ids of delivered events are kept in `state_dir`.
+    pub fn open<I, S>(state_dir: &Path, channel: &str, bot_user: &str, allowed: I) -> io::Result<Self>
     where
         I: IntoIterator<Item = S>,
         S: Into<String>,
     {
-        Inbox {
+        fs::create_dir_all(state_dir)?;
+        let state_file = state_dir.join(DELIVERED_FILE);
+        let delivered = match fs::read_to_string(&state_file) {
+            Ok(text) => text.lines().map(str::to_owned).collect(),
+            Err(e) if e.kind() == io::ErrorKind::NotFound => BTreeSet::new(),
+            Err(e) => return Err(e),
+        };
+        Ok(Inbox {
             channel: channel.to_owned(),
             bot_user: bot_user.to_owned(),
             allowed: allowed.into_iter().map(Into::into).collect(),
-        }
+            state_file,
+            delivered,
+        })
     }
 
-    /// Decides what, if anything, an event delivers. `threads` says which thread an event's
+    /// Decides what, if anything, an event delivers. `event_id` is Slack's id for the event, so a
+    /// redelivery of the same event delivers nothing. `threads` says which thread an event's
     /// timestamp opens, so a reply in a thread the door opened carries its key.
-    pub fn deliver<T: SlackTransport>(&self, event: Event, threads: &Threads<T>) -> Option<Delivery> {
+    ///
+    /// The id is recorded before the delivery is returned: a crash after this point loses the
+    /// delivery rather than repeating it, which is the at-most-once the spec asks for.
+    pub fn deliver<T: SlackTransport>(
+        &mut self,
+        event_id: &str,
+        event: Event,
+        threads: &Threads<T>,
+    ) -> io::Result<Option<Delivery>> {
+        if self.delivered.contains(event_id) {
+            return Ok(None);
+        }
+        let Some(delivery) = self.decide(event, threads) else {
+            return Ok(None);
+        };
+        self.remember(event_id)?;
+        Ok(Some(delivery))
+    }
+
+    fn decide<T: SlackTransport>(&self, event: Event, threads: &Threads<T>) -> Option<Delivery> {
         match event {
             Event::Message {
                 channel,
@@ -96,32 +133,48 @@ impl Inbox {
             && user != self.bot_user
             && self.allowed.contains(user)
     }
+
+    /// Appends the id to the delivered file, synced, before it is remembered in memory.
+    fn remember(&mut self, event_id: &str) -> io::Result<()> {
+        let mut file = fs::OpenOptions::new()
+            .create(true)
+            .append(true)
+            .open(&self.state_file)?;
+        writeln!(file, "{event_id}")?;
+        file.sync_all()?;
+        self.delivered.insert(event_id.to_owned());
+        Ok(())
+    }
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::{FakeSlack, Threads};
-    use std::path::PathBuf;
+    use crate::{FakeSlack, Grants};
 
     const CHANNEL: &str = "C1";
     const BOT: &str = "UBOT";
 
-    /// A state directory with one thread, `carducci-54`, opened by the door.
-    fn with_thread(name: &str) -> (Threads<FakeSlack>, String) {
-        let dir: PathBuf =
+    /// A state directory, empty, for one test.
+    fn scratch(name: &str) -> PathBuf {
+        let dir =
             std::env::temp_dir().join(format!("roc-slack-door-inbox-{name}-{}", std::process::id()));
-        let _ = std::fs::remove_dir_all(&dir);
-        let mut threads = Threads::open(&dir, CHANNEL, FakeSlack::new()).unwrap();
+        let _ = fs::remove_dir_all(&dir);
+        dir
+    }
+
+    /// Threads with one thread, `carducci-54`, opened by the door, and that thread's timestamp.
+    fn with_thread(dir: &Path) -> (Threads<FakeSlack>, String) {
+        let mut threads = Threads::open(dir, CHANNEL, FakeSlack::new()).unwrap();
         threads
-            .write(&crate::Grants::all(), "carducci-54", "Blocked on a token")
+            .write(&Grants::all(), "carducci-54", "Blocked on a token")
             .unwrap();
         let root = threads.transport().posts()[0].ts.clone();
         (threads, root)
     }
 
-    fn inbox() -> Inbox {
-        Inbox::new(CHANNEL, BOT, ["U1"])
+    fn inbox(dir: &Path) -> Inbox {
+        Inbox::open(dir, CHANNEL, BOT, ["U1"]).unwrap()
     }
 
     fn reply(channel: &str, user: &str, thread: Option<&str>, text: &str) -> Event {
@@ -136,9 +189,10 @@ mod tests {
 
     #[test]
     fn an_allowed_reply_in_a_thread_lands_with_its_key() {
-        let (threads, root) = with_thread("reply");
-        let delivery = inbox()
-            .deliver(reply(CHANNEL, "U1", Some(&root), "Use the fine-grained token"), &threads);
+        let dir = scratch("reply");
+        let (threads, root) = with_thread(&dir);
+        let event = reply(CHANNEL, "U1", Some(&root), "Use the fine-grained token");
+        let delivery = inbox(&dir).deliver("Ev1", event, &threads).unwrap();
         assert_eq!(
             delivery,
             Some(Delivery::Message {
@@ -152,45 +206,58 @@ mod tests {
 
     #[test]
     fn a_stranger_is_not_delivered() {
-        let (threads, root) = with_thread("stranger");
-        assert_eq!(inbox().deliver(reply(CHANNEL, "U9", Some(&root), "Hi"), &threads), None);
+        let dir = scratch("stranger");
+        let (threads, root) = with_thread(&dir);
+        let event = reply(CHANNEL, "U9", Some(&root), "Hi");
+        assert_eq!(inbox(&dir).deliver("Ev1", event, &threads).unwrap(), None);
     }
 
     #[test]
     fn the_doors_own_posts_are_not_delivered() {
-        let (threads, root) = with_thread("own");
-        assert_eq!(inbox().deliver(reply(CHANNEL, BOT, Some(&root), "Hi"), &threads), None);
+        let dir = scratch("own");
+        let (threads, root) = with_thread(&dir);
+        let event = reply(CHANNEL, BOT, Some(&root), "Hi");
+        assert_eq!(inbox(&dir).deliver("Ev1", event, &threads).unwrap(), None);
     }
 
     #[test]
     fn a_bot_message_with_no_user_is_not_delivered() {
-        let (threads, root) = with_thread("bot");
-        assert_eq!(inbox().deliver(reply(CHANNEL, "", Some(&root), "Hi"), &threads), None);
+        let dir = scratch("bot");
+        let (threads, root) = with_thread(&dir);
+        let event = reply(CHANNEL, "", Some(&root), "Hi");
+        assert_eq!(inbox(&dir).deliver("Ev1", event, &threads).unwrap(), None);
     }
 
     #[test]
     fn a_message_in_another_channel_is_not_delivered() {
-        let (threads, root) = with_thread("channel");
-        assert_eq!(inbox().deliver(reply("C2", "U1", Some(&root), "Hi"), &threads), None);
+        let dir = scratch("channel");
+        let (threads, root) = with_thread(&dir);
+        let event = reply("C2", "U1", Some(&root), "Hi");
+        assert_eq!(inbox(&dir).deliver("Ev1", event, &threads).unwrap(), None);
     }
 
     #[test]
     fn a_top_level_message_lands_with_no_key() {
-        let (threads, _) = with_thread("top-level");
-        let delivery = inbox().deliver(reply(CHANNEL, "U1", None, "What's blocked today?"), &threads);
+        let dir = scratch("top-level");
+        let (threads, _) = with_thread(&dir);
+        let event = reply(CHANNEL, "U1", None, "What's blocked today?");
+        let delivery = inbox(&dir).deliver("Ev1", event, &threads).unwrap();
         assert!(matches!(delivery, Some(Delivery::Message { key: None, .. })));
     }
 
     #[test]
     fn a_reply_in_a_thread_the_door_did_not_open_lands_with_no_key() {
-        let (threads, _) = with_thread("not-ours");
-        let delivery = inbox().deliver(reply(CHANNEL, "U1", Some("1700000000.999999"), "Hi"), &threads);
+        let dir = scratch("not-ours");
+        let (threads, _) = with_thread(&dir);
+        let event = reply(CHANNEL, "U1", Some("1700000000.999999"), "Hi");
+        let delivery = inbox(&dir).deliver("Ev1", event, &threads).unwrap();
         assert!(matches!(delivery, Some(Delivery::Message { key: None, .. })));
     }
 
     #[test]
     fn an_allowed_reaction_on_an_opening_message_lands_with_the_key() {
-        let (threads, root) = with_thread("reaction");
+        let dir = scratch("reaction");
+        let (threads, root) = with_thread(&dir);
         let event = Event::Reaction {
             channel: CHANNEL.to_owned(),
             user: "U1".to_owned(),
@@ -198,7 +265,7 @@ mod tests {
             name: "+1".to_owned(),
         };
         assert_eq!(
-            inbox().deliver(event, &threads),
+            inbox(&dir).deliver("Ev1", event, &threads).unwrap(),
             Some(Delivery::Reaction {
                 key: "carducci-54".to_owned(),
                 user: "U1".to_owned(),
@@ -209,13 +276,28 @@ mod tests {
 
     #[test]
     fn a_reaction_on_a_message_the_door_did_not_open_is_not_delivered() {
-        let (threads, _) = with_thread("reaction-other");
+        let dir = scratch("reaction-other");
+        let (threads, _) = with_thread(&dir);
         let event = Event::Reaction {
             channel: CHANNEL.to_owned(),
             user: "U1".to_owned(),
             message: "1700000000.999999".to_owned(),
             name: "+1".to_owned(),
         };
-        assert_eq!(inbox().deliver(event, &threads), None);
+        assert_eq!(inbox(&dir).deliver("Ev1", event, &threads).unwrap(), None);
+    }
+
+    #[test]
+    fn a_redelivered_event_is_delivered_once_even_across_a_restart() {
+        let dir = scratch("redeliver");
+        let (threads, root) = with_thread(&dir);
+        let event = reply(CHANNEL, "U1", Some(&root), "Which token?");
+        let mut before = inbox(&dir);
+        assert!(before.deliver("Ev1", event.clone(), &threads).unwrap().is_some());
+        assert_eq!(before.deliver("Ev1", event.clone(), &threads).unwrap(), None);
+        drop(before);
+
+        let mut after = inbox(&dir);
+        assert_eq!(after.deliver("Ev1", event, &threads).unwrap(), None);
     }
 }
