@@ -8,5 +8,478 @@
     "fixtures, run first, in order."
   ],
   "fixtures": {},
-  "scenarios": []
+  "scenarios": [
+    {
+      "id": "urn:openspec:spec:configuration:requirement:the-host-configures-the-door:scenario:a-missing-token-stops-the-start",
+      "door": true,
+      "steps": [
+        {
+          "door": "missing-app-token"
+        }
+      ]
+    },
+    {
+      "id": "urn:openspec:spec:configuration:requirement:secrets-never-leave-the-door:scenario:describing-a-thread",
+      "steps": [
+        {
+          "describe": "urn:slack:thread:{key}"
+        }
+      ]
+    },
+    {
+      "id": "urn:openspec:spec:configuration:requirement:capabilities-gate-the-verbs:scenario:posting-without-the-capability",
+      "steps": [
+        {
+          "write": {
+            "key": "carducci-54",
+            "text": "Blocked on a token"
+          },
+          "expect": "ok"
+        },
+        {
+          "write": {
+            "key": "carducci-54",
+            "text": "Hi",
+            "as": "read"
+          },
+          "expect": "not-granted"
+        },
+        {
+          "posts": [
+            {
+              "text": "Blocked on a token",
+              "thread": null
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "id": "urn:openspec:spec:configuration:requirement:slack-s-transient-failures-are-unavailable-not-errors:scenario:rate-limited",
+      "steps": [
+        {
+          "fail_next": "rate-limited:30"
+        },
+        {
+          "write": {
+            "key": "carducci-54",
+            "text": "Blocked on a token"
+          },
+          "expect": "unavailable:30"
+        },
+        {
+          "posts": []
+        }
+      ]
+    },
+    {
+      "id": "urn:openspec:spec:inbox:requirement:an-allowed-person-s-reply-lands-in-the-inbox:scenario:a-reply-arrives",
+      "steps": [
+        {
+          "write": {
+            "key": "carducci-54",
+            "text": "Blocked on a token"
+          },
+          "expect": "ok"
+        },
+        {
+          "feed": {
+            "message": {
+              "user": "U1",
+              "text": "Use the fine-grained token",
+              "in": "carducci-54"
+            }
+          }
+        },
+        {
+          "inbox": [
+            {
+              "key": "carducci-54",
+              "user": "U1",
+              "text": "Use the fine-grained token"
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "id": "urn:openspec:spec:inbox:requirement:only-allowed-people-in-the-configured-channel-are-delivered:scenario:a-stranger-s-reply-is-ignored",
+      "steps": [
+        {
+          "write": {
+            "key": "carducci-54",
+            "text": "Blocked on a token"
+          },
+          "expect": "ok"
+        },
+        {
+          "feed": {
+            "message": {
+              "user": "U9",
+              "text": "Hi",
+              "in": "carducci-54"
+            }
+          }
+        },
+        {
+          "inbox": []
+        }
+      ]
+    },
+    {
+      "id": "urn:openspec:spec:inbox:requirement:only-allowed-people-in-the-configured-channel-are-delivered:scenario:the-door-s-own-posts-are-not-delivered",
+      "steps": [
+        {
+          "write": {
+            "key": "carducci-54",
+            "text": "Blocked on a token"
+          },
+          "expect": "ok"
+        },
+        {
+          "feed": {
+            "message": {
+              "user": "UBOT",
+              "text": "Hi",
+              "in": "carducci-54"
+            }
+          }
+        },
+        {
+          "inbox": []
+        }
+      ]
+    },
+    {
+      "id": "urn:openspec:spec:inbox:requirement:a-message-outside-any-thread-lands-without-a-key:scenario:a-person-starts-a-conversation",
+      "steps": [
+        {
+          "feed": {
+            "message": {
+              "user": "U1",
+              "text": "What's blocked today?",
+              "in": null
+            }
+          }
+        },
+        {
+          "inbox": [
+            {
+              "key": null,
+              "user": "U1",
+              "text": "What's blocked today?"
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "id": "urn:openspec:spec:inbox:requirement:an-allowed-person-s-reaction-lands-in-the-inbox:scenario:a-thumbs-up-arrives",
+      "steps": [
+        {
+          "write": {
+            "key": "carducci-54",
+            "text": "Blocked on a token"
+          },
+          "expect": "ok"
+        },
+        {
+          "feed": {
+            "reaction": {
+              "user": "U1",
+              "name": "+1"
+            }
+          }
+        },
+        {
+          "inbox": [
+            {
+              "key": "carducci-54",
+              "user": "U1",
+              "reaction": "+1"
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "id": "urn:openspec:spec:inbox:requirement:each-slack-event-is-delivered-at-most-once:scenario:a-redelivered-event",
+      "steps": [
+        {
+          "write": {
+            "key": "carducci-54",
+            "text": "Blocked on a token"
+          },
+          "expect": "ok"
+        },
+        {
+          "feed": {
+            "message": {
+              "user": "U1",
+              "text": "Which token?",
+              "in": "carducci-54"
+            },
+            "id": "Ev-same"
+          }
+        },
+        {
+          "feed": {
+            "message": {
+              "user": "U1",
+              "text": "Which token?",
+              "in": "carducci-54"
+            },
+            "id": "Ev-same"
+          }
+        },
+        {
+          "inbox": [
+            {
+              "key": "carducci-54",
+              "user": "U1",
+              "text": "Which token?"
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "id": "urn:openspec:spec:reactions:requirement:a-reaction-marks-a-thread-s-opening-message:scenario:marking-a-thread-done",
+      "steps": [
+        {
+          "write": {
+            "key": "carducci-54",
+            "text": "Blocked on a token"
+          },
+          "expect": "ok"
+        },
+        {
+          "react": {
+            "key": "carducci-54",
+            "name": "white_check_mark",
+            "add": true
+          },
+          "expect": "ok"
+        },
+        {
+          "reactions": 1
+        }
+      ]
+    },
+    {
+      "id": "urn:openspec:spec:reactions:requirement:a-reaction-marks-a-thread-s-opening-message:scenario:adding-a-reaction-twice",
+      "steps": [
+        {
+          "write": {
+            "key": "carducci-54",
+            "text": "Blocked on a token"
+          },
+          "expect": "ok"
+        },
+        {
+          "react": {
+            "key": "carducci-54",
+            "name": "white_check_mark",
+            "add": true
+          },
+          "expect": "ok"
+        },
+        {
+          "react": {
+            "key": "carducci-54",
+            "name": "white_check_mark",
+            "add": true
+          },
+          "expect": "ok"
+        },
+        {
+          "reactions": 1
+        }
+      ]
+    },
+    {
+      "id": "urn:openspec:spec:reactions:requirement:a-reaction-needs-an-open-thread:scenario:reacting-to-a-key-with-no-thread",
+      "steps": [
+        {
+          "react": {
+            "key": "never-opened",
+            "name": "white_check_mark",
+            "add": true
+          },
+          "expect": "no-thread"
+        }
+      ]
+    },
+    {
+      "id": "urn:openspec:spec:threads:requirement:a-thread-is-named-by-a-key-the-caller-chooses:scenario:a-key-with-a-space-is-refused",
+      "steps": [
+        {
+          "write": {
+            "key": "item 54",
+            "text": "Opening"
+          },
+          "expect": "bad-key"
+        },
+        {
+          "posts": []
+        }
+      ]
+    },
+    {
+      "id": "urn:openspec:spec:threads:requirement:writing-to-a-new-key-opens-the-thread:scenario:opening-a-thread",
+      "steps": [
+        {
+          "write": {
+            "key": "carducci-54",
+            "text": "Blocked on a token"
+          },
+          "expect": "ok"
+        },
+        {
+          "posts": [
+            {
+              "text": "Blocked on a token",
+              "thread": null
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "id": "urn:openspec:spec:threads:requirement:writing-to-a-new-key-opens-the-thread:scenario:the-thread-survives-a-restart",
+      "steps": [
+        {
+          "write": {
+            "key": "carducci-54",
+            "text": "Blocked on a token"
+          },
+          "expect": "ok"
+        },
+        {
+          "restart": true
+        },
+        {
+          "write": {
+            "key": "carducci-54",
+            "text": "Still blocked"
+          },
+          "expect": "ok"
+        },
+        {
+          "posts": [
+            {
+              "text": "Still blocked",
+              "thread": "$root"
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "id": "urn:openspec:spec:threads:requirement:writing-to-an-open-thread-replies-in-it:scenario:replying",
+      "steps": [
+        {
+          "write": {
+            "key": "carducci-54",
+            "text": "Blocked on a token"
+          },
+          "expect": "ok"
+        },
+        {
+          "write": {
+            "key": "carducci-54",
+            "text": "Here is the command"
+          },
+          "expect": "ok"
+        },
+        {
+          "posts": [
+            {
+              "text": "Blocked on a token",
+              "thread": null
+            },
+            {
+              "text": "Here is the command",
+              "thread": "$root"
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "id": "urn:openspec:spec:threads:requirement:a-message-has-text-within-slack-s-limit:scenario:empty-text-is-refused",
+      "steps": [
+        {
+          "write": {
+            "key": "carducci-54",
+            "text": "Blocked on a token"
+          },
+          "expect": "ok"
+        },
+        {
+          "write": {
+            "key": "carducci-54",
+            "text": "   "
+          },
+          "expect": "empty-message"
+        },
+        {
+          "posts": [
+            {
+              "text": "Blocked on a token",
+              "thread": null
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "id": "urn:openspec:spec:threads:requirement:reading-a-thread-returns-the-conversation:scenario:reading-a-conversation",
+      "steps": [
+        {
+          "write": {
+            "key": "carducci-54",
+            "text": "Blocked on a token"
+          },
+          "expect": "ok"
+        },
+        {
+          "feed": {
+            "message": {
+              "user": "U1",
+              "text": "Which token?",
+              "in": "carducci-54"
+            }
+          }
+        },
+        {
+          "read": {
+            "key": "carducci-54"
+          },
+          "expect": [
+            {
+              "bot": true,
+              "text": "Blocked on a token"
+            },
+            {
+              "bot": false,
+              "user": "U1",
+              "text": "Which token?"
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "id": "urn:openspec:spec:threads:requirement:an-unknown-key-is-not-a-thread:scenario:reading-a-key-with-no-thread",
+      "steps": [
+        {
+          "read": {
+            "key": "never-opened"
+          },
+          "expect": "no-thread"
+        }
+      ]
+    }
+  ]
 }

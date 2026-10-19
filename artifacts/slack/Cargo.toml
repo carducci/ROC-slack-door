@@ -10,3 +10,6 @@ authors.workspace = true
 
 [lib]
 name = "roc_slack_door"
+
+[dev-dependencies]
+serde_json = "1"
