@@ -63,6 +63,36 @@ pub enum Event {
     },
 }
 
+/// The longest thread key the caller may choose.
+pub const MAX_KEY_LEN: usize = 80;
+
+/// Why a resource refused a request, named as the specs name it.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum Refusal {
+    /// A thread key is empty, longer than `MAX_KEY_LEN`, or has a character outside
+    /// ASCII letters, digits, `.`, `_` and `-`.
+    BadKey,
+}
+
+impl Refusal {
+    /// The name the specs give this refusal, as a caller sees it.
+    pub fn code(&self) -> &'static str {
+        match self {
+            Refusal::BadKey => "bad-key",
+        }
+    }
+}
+
+/// Checks a caller's thread key and returns it unchanged when it is valid.
+pub fn check_key(key: &str) -> Result<&str, Refusal> {
+    let valid_char = |c: char| c.is_ascii_alphanumeric() || matches!(c, '.' | '_' | '-');
+    if (1..=MAX_KEY_LEN).contains(&key.len()) && key.chars().all(valid_char) {
+        Ok(key)
+    } else {
+        Err(Refusal::BadKey)
+    }
+}
+
 /// A message the fake has recorded.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct Post {
@@ -180,6 +210,34 @@ mod tests {
         let mut slack = FakeSlack::new();
         let err = slack.react("C1", "1700000000.999999", "tada", true).unwrap_err();
         assert_eq!(err, TransportError::Rejected("message_not_found".to_owned()));
+    }
+
+    #[test]
+    fn a_key_with_a_space_is_refused() {
+        let err = check_key("item 54").unwrap_err();
+        assert_eq!(err.code(), "bad-key");
+    }
+
+    #[test]
+    fn a_key_of_letters_digits_dots_underscores_and_dashes_is_accepted() {
+        assert_eq!(check_key("carducci-54.v2_final"), Ok("carducci-54.v2_final"));
+    }
+
+    #[test]
+    fn an_empty_key_is_refused() {
+        assert_eq!(check_key(""), Err(Refusal::BadKey));
+    }
+
+    #[test]
+    fn a_key_of_exactly_the_longest_length_is_accepted_and_one_longer_refused() {
+        let longest = "k".repeat(MAX_KEY_LEN);
+        assert_eq!(check_key(&longest), Ok(longest.as_str()));
+        assert_eq!(check_key(&"k".repeat(MAX_KEY_LEN + 1)), Err(Refusal::BadKey));
+    }
+
+    #[test]
+    fn a_key_with_a_non_ascii_letter_is_refused() {
+        assert_eq!(check_key("café"), Err(Refusal::BadKey));
     }
 
     #[test]
