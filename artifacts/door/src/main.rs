@@ -6,6 +6,7 @@ use std::collections::BTreeMap;
 use std::process::ExitCode;
 
 mod config;
+mod socket;
 mod web_api;
 
 use config::Config;

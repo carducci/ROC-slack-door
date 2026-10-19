@@ -2,6 +2,7 @@
 //! authorised by the bot token in the `Authorization` header. The token is never put in an
 //! error or a log line: errors carry only what Slack answered.
 
+use std::sync::mpsc::Receiver;
 use std::time::Duration;
 
 use roc_slack_door::{Event, Message, SlackTransport, TransportError};
@@ -10,19 +11,21 @@ use serde_json::{json, Value};
 const BASE_URL: &str = "https://slack.com/api";
 const TIMEOUT: Duration = Duration::from_secs(20);
 
-/// The Web API, speaking as the door's bot.
+/// The Web API, speaking as the door's bot, and the events its Socket Mode connection sends.
 pub struct WebApi {
     agent: ureq::Agent,
     base_url: String,
     token: String,
+    events: Receiver<Event>,
 }
 
 impl WebApi {
-    pub fn new(bot_token: &str) -> Self {
+    pub fn new(bot_token: &str, events: Receiver<Event>) -> Self {
         WebApi {
             agent: ureq::AgentBuilder::new().timeout(TIMEOUT).build(),
             base_url: BASE_URL.to_owned(),
             token: bot_token.to_owned(),
+            events,
         }
     }
 
@@ -133,10 +136,9 @@ impl SlackTransport for WebApi {
             .unwrap_or_default())
     }
 
-    /// Events arrive over the Socket Mode connection (slack-resources 4.3), not from this
-    /// transport; until that is built there are none.
+    /// The events the Socket Mode connection has heard since the last call.
     fn take_events(&mut self) -> Vec<Event> {
-        Vec::new()
+        self.events.try_iter().collect()
     }
 }
 
