@@ -68,25 +68,25 @@ impl Inbox {
         })
     }
 
-    /// Decides what, if anything, an event delivers. `event_id` is Slack's id for the event, so a
-    /// redelivery of the same event delivers nothing. `threads` says which thread an event's
-    /// timestamp opens, so a reply in a thread the door opened carries its key.
+    /// Decides what, if anything, an event delivers. A redelivery of an event already delivered
+    /// delivers nothing. `threads` says which thread an event's timestamp opens, so a reply in a
+    /// thread the door opened carries its key.
     ///
     /// The id is recorded before the delivery is returned: a crash after this point loses the
     /// delivery rather than repeating it, which is the at-most-once the spec asks for.
     pub fn deliver<T: SlackTransport>(
         &mut self,
-        event_id: &str,
         event: Event,
         threads: &Threads<T>,
     ) -> io::Result<Option<Delivery>> {
-        if self.delivered.contains(event_id) {
+        let event_id = event.id().to_owned();
+        if self.delivered.contains(&event_id) {
             return Ok(None);
         }
         let Some(delivery) = self.decide(event, threads) else {
             return Ok(None);
         };
-        self.remember(event_id)?;
+        self.remember(&event_id)?;
         Ok(Some(delivery))
     }
 
@@ -98,6 +98,7 @@ impl Inbox {
                 ts,
                 thread,
                 text,
+                ..
             } => {
                 if !self.may_speak(&channel, &user) {
                     return None;
@@ -115,6 +116,7 @@ impl Inbox {
                 user,
                 message,
                 name,
+                ..
             } => {
                 if !self.may_speak(&channel, &user) {
                     return None;
@@ -179,6 +181,7 @@ mod tests {
 
     fn reply(channel: &str, user: &str, thread: Option<&str>, text: &str) -> Event {
         Event::Message {
+            id: "Ev1".to_owned(),
             channel: channel.to_owned(),
             user: user.to_owned(),
             ts: "1700000100.000001".to_owned(),
@@ -192,7 +195,7 @@ mod tests {
         let dir = scratch("reply");
         let (threads, root) = with_thread(&dir);
         let event = reply(CHANNEL, "U1", Some(&root), "Use the fine-grained token");
-        let delivery = inbox(&dir).deliver("Ev1", event, &threads).unwrap();
+        let delivery = inbox(&dir).deliver(event, &threads).unwrap();
         assert_eq!(
             delivery,
             Some(Delivery::Message {
@@ -209,7 +212,7 @@ mod tests {
         let dir = scratch("stranger");
         let (threads, root) = with_thread(&dir);
         let event = reply(CHANNEL, "U9", Some(&root), "Hi");
-        assert_eq!(inbox(&dir).deliver("Ev1", event, &threads).unwrap(), None);
+        assert_eq!(inbox(&dir).deliver(event, &threads).unwrap(), None);
     }
 
     #[test]
@@ -217,7 +220,7 @@ mod tests {
         let dir = scratch("own");
         let (threads, root) = with_thread(&dir);
         let event = reply(CHANNEL, BOT, Some(&root), "Hi");
-        assert_eq!(inbox(&dir).deliver("Ev1", event, &threads).unwrap(), None);
+        assert_eq!(inbox(&dir).deliver(event, &threads).unwrap(), None);
     }
 
     #[test]
@@ -225,7 +228,7 @@ mod tests {
         let dir = scratch("bot");
         let (threads, root) = with_thread(&dir);
         let event = reply(CHANNEL, "", Some(&root), "Hi");
-        assert_eq!(inbox(&dir).deliver("Ev1", event, &threads).unwrap(), None);
+        assert_eq!(inbox(&dir).deliver(event, &threads).unwrap(), None);
     }
 
     #[test]
@@ -233,7 +236,7 @@ mod tests {
         let dir = scratch("channel");
         let (threads, root) = with_thread(&dir);
         let event = reply("C2", "U1", Some(&root), "Hi");
-        assert_eq!(inbox(&dir).deliver("Ev1", event, &threads).unwrap(), None);
+        assert_eq!(inbox(&dir).deliver(event, &threads).unwrap(), None);
     }
 
     #[test]
@@ -241,7 +244,7 @@ mod tests {
         let dir = scratch("top-level");
         let (threads, _) = with_thread(&dir);
         let event = reply(CHANNEL, "U1", None, "What's blocked today?");
-        let delivery = inbox(&dir).deliver("Ev1", event, &threads).unwrap();
+        let delivery = inbox(&dir).deliver(event, &threads).unwrap();
         assert!(matches!(delivery, Some(Delivery::Message { key: None, .. })));
     }
 
@@ -250,7 +253,7 @@ mod tests {
         let dir = scratch("not-ours");
         let (threads, _) = with_thread(&dir);
         let event = reply(CHANNEL, "U1", Some("1700000000.999999"), "Hi");
-        let delivery = inbox(&dir).deliver("Ev1", event, &threads).unwrap();
+        let delivery = inbox(&dir).deliver(event, &threads).unwrap();
         assert!(matches!(delivery, Some(Delivery::Message { key: None, .. })));
     }
 
@@ -259,13 +262,14 @@ mod tests {
         let dir = scratch("reaction");
         let (threads, root) = with_thread(&dir);
         let event = Event::Reaction {
+            id: "Ev1".to_owned(),
             channel: CHANNEL.to_owned(),
             user: "U1".to_owned(),
             message: root,
             name: "+1".to_owned(),
         };
         assert_eq!(
-            inbox(&dir).deliver("Ev1", event, &threads).unwrap(),
+            inbox(&dir).deliver(event, &threads).unwrap(),
             Some(Delivery::Reaction {
                 key: "carducci-54".to_owned(),
                 user: "U1".to_owned(),
@@ -279,12 +283,13 @@ mod tests {
         let dir = scratch("reaction-other");
         let (threads, _) = with_thread(&dir);
         let event = Event::Reaction {
+            id: "Ev1".to_owned(),
             channel: CHANNEL.to_owned(),
             user: "U1".to_owned(),
             message: "1700000000.999999".to_owned(),
             name: "+1".to_owned(),
         };
-        assert_eq!(inbox(&dir).deliver("Ev1", event, &threads).unwrap(), None);
+        assert_eq!(inbox(&dir).deliver(event, &threads).unwrap(), None);
     }
 
     #[test]
@@ -293,11 +298,11 @@ mod tests {
         let (threads, root) = with_thread(&dir);
         let event = reply(CHANNEL, "U1", Some(&root), "Which token?");
         let mut before = inbox(&dir);
-        assert!(before.deliver("Ev1", event.clone(), &threads).unwrap().is_some());
-        assert_eq!(before.deliver("Ev1", event.clone(), &threads).unwrap(), None);
+        assert!(before.deliver(event.clone(), &threads).unwrap().is_some());
+        assert_eq!(before.deliver(event.clone(), &threads).unwrap(), None);
         drop(before);
 
         let mut after = inbox(&dir);
-        assert_eq!(after.deliver("Ev1", event, &threads).unwrap(), None);
+        assert_eq!(after.deliver(event, &threads).unwrap(), None);
     }
 }

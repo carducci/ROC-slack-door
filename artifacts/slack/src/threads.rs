@@ -275,6 +275,7 @@ mod tests {
         threads.write(&all(), "carducci-54", "Blocked on a token").unwrap();
         let root = threads.transport().posts()[0].ts.clone();
         threads.transport_mut().feed(Event::Message {
+            id: "Ev1".to_owned(),
             channel: "C1".to_owned(),
             user: "U1".to_owned(),
             ts: "1700000100.000001".to_owned(),
