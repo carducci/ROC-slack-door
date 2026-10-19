@@ -104,6 +104,8 @@ pub enum Refusal {
     MessageTooLong,
     /// The key names no thread the door has opened.
     NoThread,
+    /// The reaction's name is not a Slack emoji name.
+    BadReaction,
 }
 
 impl Refusal {
@@ -114,7 +116,19 @@ impl Refusal {
             Refusal::EmptyMessage => "empty-message",
             Refusal::MessageTooLong => "message-too-long",
             Refusal::NoThread => "no-thread",
+            Refusal::BadReaction => "bad-reaction",
         }
+    }
+}
+
+/// Checks a reaction's name, a Slack emoji name, and returns it unchanged when it is valid.
+pub fn check_reaction(name: &str) -> Result<&str, Refusal> {
+    let valid_char =
+        |c: char| c.is_ascii_lowercase() || c.is_ascii_digit() || matches!(c, '_' | '-' | '+');
+    if !name.is_empty() && name.chars().all(valid_char) {
+        Ok(name)
+    } else {
+        Err(Refusal::BadReaction)
     }
 }
 
