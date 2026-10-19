@@ -1,0 +1,28 @@
+# Where this repository keeps its specs, its artifacts, its saved queries and its scripts.
+# Committed. `python3 tools/gonk.py init` checks every path named here.
+version = 1
+
+# A spec format is a [[spec]] entry: where its tree lives and the mapping that lifts it to
+# a graph (an ikigai-markdown mapping resource, `urn:markdown:mapping:{name}`). OpenSpec is
+# the default. A second format is a second entry naming its own mapping, not new code.
+[[spec]]
+format = "openspec"
+root = "openspec"
+dirs = ["specs", "changes"]
+mapping = "urn:markdown:mapping:openspec"
+
+# One directory per deployable thing, any language each: artifacts/<name>/. A spec or a
+# change names the artifacts it touches on a line that starts with the marker, with each
+# name in backticks:   Artifacts: `service`, `cli`
+[artifacts]
+root = "artifacts"
+marker = "Artifacts:"
+
+# Saved SPARQL over the ledger and the spec graph, one query per file.
+[queries]
+root = ".gonk/queries"
+language = "sparql"
+
+# Workflow scripts: what this team runs, as files, until gonk can publish them.
+[scripts]
+root = ".gonk/scripts"

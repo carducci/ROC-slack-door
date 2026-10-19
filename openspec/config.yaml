@@ -1,0 +1,7 @@
+# OpenSpec's own project file (OpenSpec 1.x writes this on `openspec init`).
+# `spec-driven` is its default workflow: proposal, delta specs, design, tasks.
+schema: spec-driven
+
+context: |
+  Specs describe observable behavior. Each spec and each change names the artifacts it
+  touches on one line, `Artifacts: `name`, `name``, matching directories under artifacts/.

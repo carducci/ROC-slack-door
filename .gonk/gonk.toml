@@ -1,0 +1,4 @@
+# Which ledger this repository's work lives in. Committed: every clone files and claims
+# in the same ledger. How a machine reaches gonk is NOT here; see .gonk/local.toml.
+# Written by `python3 tools/gonk.py init --ledger <name>`.
+ledger = "mago"
