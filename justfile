@@ -61,12 +61,6 @@ worker-plan *flags:
 worker-forget item:
     python3 tools/worker.py forget {{item}}
 
-# Every test, as CI runs them: the spec's scenario vectors (through the rules and over HTTP),
-# the client against the real service, and the check that the specs and the vectors agree.
+# Every test, as CI runs them: the check that the specs and the vectors agree, then the workspace.
 gates:
     python3 scripts/test.py
-
-# Run the service: just serve [--port 8080] [--today 2026-10-01]
-serve *flags:
-    cargo run --quiet --bin serve -- {{flags}}
-
