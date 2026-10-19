@@ -10,7 +10,7 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
-      - name: Tests (the scenario vectors, the service, the client, specs against vectors)
+      - name: Tests (specs against vectors, then the workspace)
         # The same command `just gates` runs locally. Standard library only: nothing to
         # install, and nothing to fetch, so the build needs no network.
         run: python3 scripts/test.py
