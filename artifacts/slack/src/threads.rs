@@ -6,7 +6,7 @@ use std::fs;
 use std::io::{self, Write};
 use std::path::{Path, PathBuf};
 
-use crate::{check_key, check_text, Entry, Refusal, SlackTransport, TransportError};
+use crate::{check_key, check_reaction, check_text, Entry, Refusal, SlackTransport, TransportError};
 
 /// The map's file in the state directory: one thread per line, `key TAB channel TAB ts`.
 const MAP_FILE: &str = "threads.tsv";
@@ -79,6 +79,7 @@ impl<T: SlackTransport> Threads<T> {
     /// when `add` is false. A key with no thread is refused before Slack is called.
     pub fn react(&mut self, key: &str, name: &str, add: bool) -> Result<(), ThreadError> {
         check_key(key).map_err(ThreadError::Refused)?;
+        check_reaction(name).map_err(ThreadError::Refused)?;
         let thread = self
             .threads
             .get(key)
@@ -276,6 +277,18 @@ mod tests {
         let mut threads = Threads::open(&dir, "C1", FakeSlack::new()).unwrap();
         let err = threads.react("never-opened", "white_check_mark", true).unwrap_err();
         assert!(matches!(err, ThreadError::Refused(Refusal::NoThread)));
+        assert!(threads.transport().reactions().is_empty());
+    }
+
+    #[test]
+    fn a_reaction_with_a_bad_name_is_refused_and_nothing_is_added() {
+        let dir = scratch("react-bad-name");
+        let mut threads = Threads::open(&dir, "C1", FakeSlack::new()).unwrap();
+        threads.write("carducci-54", "Opening").unwrap();
+        for name in ["White Check", "tada!", "", "Tada"] {
+            let err = threads.react("carducci-54", name, true).unwrap_err();
+            assert!(matches!(err, ThreadError::Refused(Refusal::BadReaction)));
+        }
         assert!(threads.transport().reactions().is_empty());
     }
 
