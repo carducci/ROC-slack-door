@@ -5,9 +5,8 @@
 use std::collections::BTreeMap;
 use std::process::ExitCode;
 
-use roc_slack_door as _;
-
 mod config;
+mod web_api;
 
 use config::Config;
 
