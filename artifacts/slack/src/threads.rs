@@ -6,7 +6,7 @@ use std::fs;
 use std::io::{self, Write};
 use std::path::{Path, PathBuf};
 
-use crate::{check_key, check_text, Refusal, SlackTransport, TransportError};
+use crate::{check_key, check_text, Entry, Refusal, SlackTransport, TransportError};
 
 /// The map's file in the state directory: one thread per line, `key TAB channel TAB ts`.
 const MAP_FILE: &str = "threads.tsv";
@@ -75,9 +75,28 @@ impl<T: SlackTransport> Threads<T> {
         Ok(())
     }
 
+    /// The conversation the key names, the opening message first.
+    pub fn read(&mut self, key: &str) -> Result<Vec<Entry>, ThreadError> {
+        check_key(key).map_err(ThreadError::Refused)?;
+        let thread = self
+            .threads
+            .get(key)
+            .ok_or(ThreadError::Refused(Refusal::NoThread))?;
+        let messages = self
+            .transport
+            .replies(&thread.channel, &thread.ts)
+            .map_err(ThreadError::Transport)?;
+        Ok(messages.iter().map(Entry::from).collect())
+    }
+
     /// The transport the threads post through.
     pub fn transport(&self) -> &T {
         &self.transport
+    }
+
+    /// The transport, mutably: a test feeds it the events a person would have caused.
+    pub fn transport_mut(&mut self) -> &mut T {
+        &mut self.transport
     }
 
     /// Writes the whole map to a temporary file and renames it over the old one, so a crash
@@ -185,6 +204,45 @@ mod tests {
         let mut threads = Threads::open(&dir, "C1", FakeSlack::new()).unwrap();
         threads.write("carducci-54", &"x".repeat(MAX_MESSAGE_LEN)).unwrap();
         assert_eq!(threads.transport().posts().len(), 1);
+    }
+
+    #[test]
+    fn reading_a_thread_returns_the_opening_message_then_the_replies() {
+        let dir = scratch("read");
+        let mut threads = Threads::open(&dir, "C1", FakeSlack::new()).unwrap();
+        threads.write("carducci-54", "Blocked on a token").unwrap();
+        let root = threads.transport().posts()[0].ts.clone();
+        threads.transport_mut().feed(crate::Event::Message {
+            channel: "C1".to_owned(),
+            user: "U1".to_owned(),
+            ts: "1700000100.000001".to_owned(),
+            thread: Some(root),
+            text: "Which token?".to_owned(),
+        });
+        let entries = threads.read("carducci-54").unwrap();
+        assert_eq!(entries.len(), 2);
+        assert!(entries[0].bot && entries[0].text == "Blocked on a token");
+        assert!(!entries[1].bot && entries[1].user == "U1" && entries[1].text == "Which token?");
+    }
+
+    #[test]
+    fn the_json_reading_has_no_channel_or_message_ids() {
+        let dir = scratch("read-json");
+        let mut threads = Threads::open(&dir, "C1", FakeSlack::new()).unwrap();
+        threads.write("carducci-54", "Blocked on a token").unwrap();
+        let root = threads.transport().posts()[0].ts.clone();
+        let json = crate::to_json(&threads.read("carducci-54").unwrap());
+        assert!(json.contains("\"bot\":true"));
+        assert!(!json.contains("C1"));
+        assert!(!json.contains(&root));
+    }
+
+    #[test]
+    fn reading_a_key_with_no_thread_is_refused() {
+        let dir = scratch("read-none");
+        let mut threads = Threads::open(&dir, "C1", FakeSlack::new()).unwrap();
+        let err = threads.read("never-opened").unwrap_err();
+        assert!(matches!(err, ThreadError::Refused(Refusal::NoThread)));
     }
 
     #[test]
