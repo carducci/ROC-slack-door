@@ -191,6 +191,36 @@ pub fn check_key(key: &str) -> Result<&str, Refusal> {
     }
 }
 
+/// What a resource is, for a caller that asks. A description holds no secret.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct Meta {
+    /// The resource's name, with its placeholders in braces.
+    pub resource: &'static str,
+    pub description: &'static str,
+    /// Each verb the resource answers, with the capability it needs.
+    pub verbs: Vec<(&'static str, &'static str)>,
+}
+
+/// The resources the door serves, described.
+pub fn descriptions() -> Vec<Meta> {
+    vec![
+        Meta {
+            resource: "urn:slack:thread:{key}",
+            description: "A conversation in the configured Slack channel, named by a key you \
+                choose. Writing to a key with no thread opens one; writing to an open thread \
+                replies in it; reading returns its messages in order, in UTC.",
+            verbs: vec![("source", READ), ("sink", POST)],
+        },
+        Meta {
+            resource: "urn:slack:thread:{key}:reaction:{name}",
+            description: "A reaction on a thread's opening message, such as white_check_mark \
+                to mark it done. Adding one twice, or removing one that is not there, changes \
+                nothing.",
+            verbs: vec![("sink", REACT), ("delete", REACT)],
+        },
+    ]
+}
+
 /// A message the door's bot posted, as the fake records it.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct Post {
@@ -408,6 +438,27 @@ mod tests {
         slack.feed(reaction.clone());
         assert_eq!(slack.take_events(), vec![reaction]);
         assert!(slack.take_events().is_empty());
+    }
+
+    #[test]
+    fn every_resource_is_described_with_its_capabilities() {
+        let described: Vec<&str> = descriptions().iter().map(|meta| meta.resource).collect();
+        assert_eq!(
+            described,
+            ["urn:slack:thread:{key}", "urn:slack:thread:{key}:reaction:{name}"]
+        );
+        for meta in descriptions() {
+            assert!(!meta.description.is_empty());
+            assert!(meta.verbs.iter().all(|(_, capability)| capability.starts_with("urn:cap:slack:")));
+        }
+    }
+
+    #[test]
+    fn no_description_carries_a_token() {
+        for meta in descriptions() {
+            assert!(!meta.description.contains("xoxb-"));
+            assert!(!meta.description.contains("xapp-"));
+        }
     }
 
     #[test]
