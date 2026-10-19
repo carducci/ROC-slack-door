@@ -1,5 +1,12 @@
-# The workspace. Empty until slack-resources 1.2 adds artifacts/slack (the library) and
-# artifacts/door (the binary).
+# The workspace: artifacts/slack, the library (roc-slack-door), and artifacts/door, the binary
+# that serves it (package roc-slack-door-server, program roc-slack-door).
 [workspace]
 resolver = "2"
-members = []
+members = ["artifacts/slack", "artifacts/door"]
+
+# What every crate here shares; each one says `license.workspace = true` and so on.
+[workspace.package]
+edition = "2021"
+license = "MIT OR Apache-2.0"
+repository = "https://github.com/carducci/ROC-slack-door"
+authors = ["Michael Carducci"]

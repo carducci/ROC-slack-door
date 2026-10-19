@@ -32,10 +32,11 @@ The specs say exactly what each resource does:
 
 ## Two pieces
 
-- **`artifacts/slack`** is the library crate. It holds the space, its endpoints, and their
+- **`artifacts/slack`** is the library crate, `roc-slack-door`. It holds the space, its endpoints, and their
   descriptions, written against a `SlackTransport` trait; every scenario runs against a fake
   transport, with no network.
-- **`artifacts/door`** is the binary. It holds the Socket Mode connection (outbound only, so the
+- **`artifacts/door`** is the binary, the program `roc-slack-door` (package
+  `roc-slack-door-server`). It holds the Socket Mode connection (outbound only, so the
   machine running it needs no public URL), reads its configuration, writes the inbox, and serves
   the space over a Unix socket or QUIC for another kernel to mount.
 
