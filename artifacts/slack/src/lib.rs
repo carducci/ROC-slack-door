@@ -106,6 +106,8 @@ pub enum Refusal {
     NoThread,
     /// The reaction's name is not a Slack emoji name.
     BadReaction,
+    /// The caller does not hold the capability the verb needs.
+    NotGranted(&'static str),
 }
 
 impl Refusal {
@@ -117,6 +119,42 @@ impl Refusal {
             Refusal::MessageTooLong => "message-too-long",
             Refusal::NoThread => "no-thread",
             Refusal::BadReaction => "bad-reaction",
+            Refusal::NotGranted(_) => "not-granted",
+        }
+    }
+}
+
+/// The capability that reads a thread.
+pub const READ: &str = "urn:cap:slack:read";
+/// The capability that posts to a thread.
+pub const POST: &str = "urn:cap:slack:post";
+/// The capability that adds or removes a reaction on a thread.
+pub const REACT: &str = "urn:cap:slack:react";
+
+/// The capabilities one caller holds.
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
+pub struct Grants(BTreeSet<String>);
+
+impl Grants {
+    pub fn new<I, S>(capabilities: I) -> Self
+    where
+        I: IntoIterator<Item = S>,
+        S: Into<String>,
+    {
+        Grants(capabilities.into_iter().map(Into::into).collect())
+    }
+
+    /// A caller holding every capability the door has.
+    pub fn all() -> Self {
+        Self::new([READ, POST, REACT])
+    }
+
+    /// Accepts the caller only when it holds `capability`; otherwise refuses naming it.
+    pub fn require(&self, capability: &'static str) -> Result<(), Refusal> {
+        if self.0.contains(capability) {
+            Ok(())
+        } else {
+            Err(Refusal::NotGranted(capability))
         }
     }
 }
