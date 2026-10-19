@@ -35,7 +35,7 @@ this change.
 ## Impact
 
 - Artifacts: `slack`, `door`
-- `slack` is the library crate, `ikigai-slack`: the space, its endpoints and descriptions, over
+- `slack` is the library crate, `roc-slack-door`: the space, its endpoints and descriptions, over
   a `SlackTransport` trait so every scenario runs against a fake with no network.
 - `door` is the binary: it holds the Socket Mode connection, reads the host's configuration,
   writes the inbox and serves the space over a socket or QUIC for another kernel to mount.
