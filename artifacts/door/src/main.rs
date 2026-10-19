@@ -1,15 +1,24 @@
-//! `roc-slack-door`: the door. It reads the host's configuration, will hold the Slack Socket
-//! Mode connection, write the inbox and serve the `roc_slack_door` space over a Unix socket or
-//! QUIC (slack-resources 4.2 to 4.4). For now it checks the configuration and stops there.
+//! `roc-slack-door`: the door. It reads the host's configuration, holds the Socket Mode
+//! connection, serves the Slack resources over a Unix socket in the state directory, and writes
+//! the inbox through its own kernel (slack-resources 4.x).
 
 use std::collections::BTreeMap;
 use std::process::ExitCode;
+use std::sync::mpsc;
+use std::sync::{Arc, Mutex};
+use std::thread;
+use std::time::Duration;
 
 mod config;
+mod serve;
 mod socket;
 mod web_api;
 
 use config::Config;
+use roc_slack_door::{Inbox, SlackTransport, Threads};
+
+/// How often the inbox loop takes what Socket Mode has heard.
+const POLL: Duration = Duration::from_millis(200);
 
 fn main() -> ExitCode {
     // The one argument is the host's configuration file: `roc-slack-door --config PATH`.
@@ -29,14 +38,81 @@ fn main() -> ExitCode {
         }
     };
     match Config::resolve(&file, |name| std::env::var(name).ok()) {
-        Ok(_) => {
-            println!("roc-slack-door: configuration ok; the door does not serve yet");
-            ExitCode::SUCCESS
-        }
+        Ok(config) => run(config),
         Err(missing) => {
             let names: Vec<&str> = missing.0;
             eprintln!("roc-slack-door: refusing to start, missing: {}", names.join(", "));
             ExitCode::from(2)
         }
+    }
+}
+
+/// Starts the door and runs it until the process stops: the Socket Mode connection, the Web API,
+/// the kernel on `door.sock` in the state directory, and the inbox loop that writes deliveries
+/// through that kernel.
+fn run(config: Config) -> ExitCode {
+    if let Err(e) = std::fs::create_dir_all(&config.state_dir) {
+        eprintln!("roc-slack-door: cannot create the state directory: {e}");
+        return ExitCode::from(2);
+    }
+
+    let (events_tx, events_rx) = mpsc::channel();
+    let app_token = config.app_token.clone();
+    thread::spawn(move || socket::run(&app_token, &events_tx));
+
+    let api = web_api::WebApi::new(&config.bot_token, events_rx);
+    let threads = match Threads::open(&config.state_dir, &config.channel, api) {
+        Ok(threads) => Arc::new(Mutex::new(threads)),
+        Err(e) => {
+            eprintln!("roc-slack-door: cannot open the thread map: {e}");
+            return ExitCode::from(2);
+        }
+    };
+    let mut inbox = match Inbox::open(&config.state_dir, &config.channel, "", config.allowed_users.clone()) {
+        Ok(inbox) => inbox,
+        Err(e) => {
+            eprintln!("roc-slack-door: cannot open the inbox: {e}");
+            return ExitCode::from(2);
+        }
+    };
+
+    let kernel = Arc::new(serve::kernel(Arc::clone(&threads), config.state_dir.join("spaces")));
+    let socket_path = config.state_dir.join("door.sock");
+    println!("roc-slack-door: serving {}", socket_path.display());
+    let serving = Arc::clone(&kernel);
+    let serve_path = socket_path.clone();
+    thread::spawn(move || {
+        if let Err(e) = ikigai_ipc::serve_shared(serving, &serve_path) {
+            eprintln!("roc-slack-door: the socket stopped serving: {e}");
+        }
+    });
+
+    loop {
+        let deliveries = {
+            let mut threads = match threads.lock() {
+                Ok(threads) => threads,
+                Err(_) => {
+                    eprintln!("roc-slack-door: the thread map is poisoned; stopping");
+                    return ExitCode::from(1);
+                }
+            };
+            let events = threads.transport_mut().take_events();
+            events
+                .into_iter()
+                .filter_map(|event| match inbox.deliver(event, &*threads) {
+                    Ok(delivery) => delivery,
+                    Err(e) => {
+                        eprintln!("roc-slack-door: the inbox could not record an event: {e}");
+                        None
+                    }
+                })
+                .collect::<Vec<_>>()
+        };
+        for delivery in &deliveries {
+            if let Err(why) = serve::drop_delivery(&kernel, &config.inbox_space, delivery) {
+                eprintln!("roc-slack-door: a delivery was not written to the inbox: {why}");
+            }
+        }
+        thread::sleep(POLL);
     }
 }
