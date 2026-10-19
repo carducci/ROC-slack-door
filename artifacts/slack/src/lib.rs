@@ -6,12 +6,15 @@
 //! `openspec/` runs against a fake with no network. What each resource does is specified in
 //! `openspec/changes/slack-resources/` until that change is archived into `openspec/specs/`.
 //!
-//! The transport and its in-memory fake are in place; the resources that use them are not yet.
+//! The transport, its in-memory fake and the thread resource are in place; reactions and the
+//! inbox are not yet.
 
 use std::collections::BTreeSet;
 
+mod conversation;
 mod threads;
 
+pub use conversation::{to_json, Entry};
 pub use threads::{Thread, ThreadError, Threads};
 
 /// What the door asks of Slack. The real implementation speaks the Web API and Socket Mode;
@@ -32,6 +35,10 @@ pub trait SlackTransport {
         add: bool,
     ) -> Result<(), TransportError>;
 
+    /// The messages of the thread that opens at `root`: the opening message first, then the
+    /// replies, in the order Slack holds them.
+    fn replies(&mut self, channel: &str, root: &str) -> Result<Vec<Message>, TransportError>;
+
     /// The events Slack has delivered since the last call, oldest first.
     fn take_events(&mut self) -> Vec<Event>;
 }
@@ -45,6 +52,18 @@ pub enum TransportError {
     Unavailable(String),
     /// Slack refused the request, with the error it gave.
     Rejected(String),
+}
+
+/// A message in a channel, as Slack reports it.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct Message {
+    /// Slack's id for the message: its timestamp.
+    pub ts: String,
+    /// The Slack user id of the author.
+    pub user: String,
+    /// Whether the author is the door's own bot.
+    pub bot: bool,
+    pub text: String,
 }
 
 /// Something a person did in the channel that the door hears about.
@@ -83,6 +102,8 @@ pub enum Refusal {
     EmptyMessage,
     /// The text is longer than `MAX_MESSAGE_LEN` characters.
     MessageTooLong,
+    /// The key names no thread the door has opened.
+    NoThread,
 }
 
 impl Refusal {
@@ -92,6 +113,7 @@ impl Refusal {
             Refusal::BadKey => "bad-key",
             Refusal::EmptyMessage => "empty-message",
             Refusal::MessageTooLong => "message-too-long",
+            Refusal::NoThread => "no-thread",
         }
     }
 }
@@ -117,7 +139,7 @@ pub fn check_key(key: &str) -> Result<&str, Refusal> {
     }
 }
 
-/// A message the fake has recorded.
+/// A message the door's bot posted, as the fake records it.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct Post {
     pub ts: String,
@@ -126,10 +148,18 @@ pub struct Post {
     pub text: String,
 }
 
+/// A message in the fake's history, with the thread it is in.
+#[derive(Debug, Clone)]
+struct Stored {
+    channel: String,
+    thread: Option<String>,
+    message: Message,
+}
+
 /// An in-memory `SlackTransport`: posts and reactions are recorded, events are fed by the test.
 #[derive(Debug, Default)]
 pub struct FakeSlack {
-    posts: Vec<Post>,
+    history: Vec<Stored>,
     reactions: BTreeSet<(String, String)>,
     events: Vec<Event>,
 }
@@ -139,9 +169,18 @@ impl FakeSlack {
         Self::default()
     }
 
-    /// Every message posted so far, oldest first.
-    pub fn posts(&self) -> &[Post] {
-        &self.posts
+    /// Every message the door's bot has posted so far, oldest first.
+    pub fn posts(&self) -> Vec<Post> {
+        self.history
+            .iter()
+            .filter(|stored| stored.message.bot)
+            .map(|stored| Post {
+                ts: stored.message.ts.clone(),
+                channel: stored.channel.clone(),
+                thread: stored.thread.clone(),
+                text: stored.message.text.clone(),
+            })
+            .collect()
     }
 
     /// Every reaction present, as (message timestamp, reaction name).
@@ -149,8 +188,28 @@ impl FakeSlack {
         &self.reactions
     }
 
-    /// Queues an event for the next `take_events`.
+    /// Queues an event for the next `take_events`. A message also joins the channel's history,
+    /// so `replies` sees it.
     pub fn feed(&mut self, event: Event) {
+        if let Event::Message {
+            channel,
+            user,
+            ts,
+            thread,
+            text,
+        } = &event
+        {
+            self.history.push(Stored {
+                channel: channel.clone(),
+                thread: thread.clone(),
+                message: Message {
+                    ts: ts.clone(),
+                    user: user.clone(),
+                    bot: false,
+                    text: text.clone(),
+                },
+            });
+        }
         self.events.push(event);
     }
 }
@@ -162,12 +221,16 @@ impl SlackTransport for FakeSlack {
         thread: Option<&str>,
         text: &str,
     ) -> Result<String, TransportError> {
-        let ts = format!("1700000000.{:06}", self.posts.len() + 1);
-        self.posts.push(Post {
-            ts: ts.clone(),
+        let ts = format!("1700000000.{:06}", self.history.len() + 1);
+        self.history.push(Stored {
             channel: channel.to_owned(),
             thread: thread.map(str::to_owned),
-            text: text.to_owned(),
+            message: Message {
+                ts: ts.clone(),
+                user: "UBOT".to_owned(),
+                bot: true,
+                text: text.to_owned(),
+            },
         });
         Ok(ts)
     }
@@ -179,7 +242,7 @@ impl SlackTransport for FakeSlack {
         name: &str,
         add: bool,
     ) -> Result<(), TransportError> {
-        if !self.posts.iter().any(|post| post.ts == message) {
+        if !self.history.iter().any(|stored| stored.message.ts == message) {
             return Err(TransportError::Rejected("message_not_found".to_owned()));
         }
         let key = (message.to_owned(), name.to_owned());
@@ -189,6 +252,18 @@ impl SlackTransport for FakeSlack {
             self.reactions.remove(&key);
         }
         Ok(())
+    }
+
+    fn replies(&mut self, channel: &str, root: &str) -> Result<Vec<Message>, TransportError> {
+        Ok(self
+            .history
+            .iter()
+            .filter(|stored| {
+                stored.channel == channel
+                    && (stored.message.ts == root || stored.thread.as_deref() == Some(root))
+            })
+            .map(|stored| stored.message.clone())
+            .collect())
     }
 
     fn take_events(&mut self) -> Vec<Event> {
@@ -237,6 +312,37 @@ mod tests {
     }
 
     #[test]
+    fn replies_are_the_opening_message_then_the_fed_replies() {
+        let mut slack = FakeSlack::new();
+        let root = slack.post("C1", None, "Blocked on a token").unwrap();
+        slack.feed(Event::Message {
+            channel: "C1".to_owned(),
+            user: "U1".to_owned(),
+            ts: "1700000100.000001".to_owned(),
+            thread: Some(root.clone()),
+            text: "Which token?".to_owned(),
+        });
+        let messages = slack.replies("C1", &root).unwrap();
+        assert_eq!(messages.len(), 2);
+        assert!(messages[0].bot && messages[0].text == "Blocked on a token");
+        assert!(!messages[1].bot && messages[1].user == "U1");
+    }
+
+    #[test]
+    fn fed_events_are_taken_once_in_order() {
+        let mut slack = FakeSlack::new();
+        let reaction = Event::Reaction {
+            channel: "C1".to_owned(),
+            user: "U1".to_owned(),
+            message: "1700000000.000001".to_owned(),
+            name: "tada".to_owned(),
+        };
+        slack.feed(reaction.clone());
+        assert_eq!(slack.take_events(), vec![reaction]);
+        assert!(slack.take_events().is_empty());
+    }
+
+    #[test]
     fn a_key_with_a_space_is_refused() {
         let err = check_key("item 54").unwrap_err();
         assert_eq!(err.code(), "bad-key");
@@ -262,19 +368,5 @@ mod tests {
     #[test]
     fn a_key_with_a_non_ascii_letter_is_refused() {
         assert_eq!(check_key("café"), Err(Refusal::BadKey));
-    }
-
-    #[test]
-    fn fed_events_are_taken_once_in_order() {
-        let mut slack = FakeSlack::new();
-        let reaction = Event::Reaction {
-            channel: "C1".to_owned(),
-            user: "U1".to_owned(),
-            message: "1700000000.000001".to_owned(),
-            name: "tada".to_owned(),
-        };
-        slack.feed(reaction.clone());
-        assert_eq!(slack.take_events(), vec![reaction]);
-        assert!(slack.take_events().is_empty());
     }
 }
