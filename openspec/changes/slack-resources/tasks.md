@@ -3,7 +3,7 @@
 ## 1. Retire the sample
 
 - [x] 1.1 Remove the lending specs, the two sample changes, their vectors and the `service` and `cli` artifacts; keep the spec-and-vector agreement test, with an empty vectors file
-- [ ] 1.2 Rewrite README.md and the Cargo workspace for `roc-slack-door` (licence `MIT OR Apache-2.0`), with `artifacts/slack` and `artifacts/door` as members
+- [x] 1.2 Rewrite README.md and the Cargo workspace for `roc-slack-door` (licence `MIT OR Apache-2.0`), with `artifacts/slack` and `artifacts/door` as members
 
 ## 2. Library (`slack`)
 
