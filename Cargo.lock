@@ -3,12 +3,5 @@
 version = 4
 
 [[package]]
-name = "lending-cli"
-version = "0.1.0"
-dependencies = [
- "lending-service",
-]
-
-[[package]]
 name = "lending-service"
 version = "0.1.0"

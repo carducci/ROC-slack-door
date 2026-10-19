@@ -70,6 +70,3 @@ gates:
 serve *flags:
     cargo run --quiet --bin serve -- {{flags}}
 
-# The command-line client: just library lend ada pp-1
-library *args:
-    cargo run --quiet --bin library -- {{args}}

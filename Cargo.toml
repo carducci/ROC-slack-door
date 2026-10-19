@@ -3,4 +3,4 @@
 # standard library is enough, so `cargo test` needs no network and no lock file to resolve.
 [workspace]
 resolver = "2"
-members = ["artifacts/service", "artifacts/cli"]
+members = ["artifacts/service"]
