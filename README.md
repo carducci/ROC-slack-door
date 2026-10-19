@@ -9,9 +9,10 @@ does all of that with the same five verbs it uses for everything else. Channel i
 timestamps, Socket Mode envelopes, retries, and rate limits stay behind the names, so a program
 written against them can move to another chat system by swapping the door underneath it.
 
-> **Status: proposed, not built.** The first change,
+> **Status: built, not yet run against Slack.** The first change,
 > [`openspec/changes/slack-resources/`](openspec/changes/slack-resources/proposal.md), says what
-> this will do. There is no Slack code yet.
+> this does. The library, the door, and the Unix socket are in `main`; the live connection
+> and the first mount from another kernel are still to be checked by hand.
 
 ## The resources (proposed)
 
@@ -42,6 +43,102 @@ The specs say exactly what each resource does:
 
 The tokens, the workspace, the channel, the allowed people, and the bot's name belong to
 whoever runs the door; they arrive as configuration. Nothing in this repository names one.
+
+## Running the door
+
+Every value below is a placeholder. Use your own, and keep the tokens out of the repository,
+out of the shell history, and out of any file another user can read.
+
+### 1. Create the Slack app
+
+Create a Slack app from a manifest in your workspace, with these settings:
+
+```yaml
+display_information:
+  name: <bot name>
+features:
+  bot_user:
+    display_name: <bot name>
+oauth_config:
+  scopes:
+    bot:
+      - chat:write
+      - groups:history
+      - reactions:read
+      - reactions:write
+settings:
+  event_subscriptions:
+    bot_events:
+      - message.groups
+      - reaction_added
+  socket_mode_enabled: true
+```
+
+Install the app to the workspace. Then make a private channel for the door, and invite the bot
+to it (`/invite @<bot name>`).
+
+### 2. Collect the two tokens and the ids
+
+- **Bot token** (`xoxb-…`): the app's *OAuth & Permissions* page, after installing.
+- **App-level token** (`xapp-…`): *Basic Information*, *App-Level Tokens*, with the
+  `connections:write` scope.
+- **Channel id** (`C0000000000`): the channel's details, at the bottom.
+- **Allowed people** (`U0000000000`, comma separated): each person's profile, *More*, *Copy member ID*.
+
+### 3. Configure the door
+
+Write `KEY=VALUE` lines to a file only you can read (`chmod 600`):
+
+```sh
+SLACK_BOT_TOKEN=xoxb-<your bot token>
+SLACK_APP_TOKEN=xapp-<your app-level token>
+SLACK_CHANNEL=C0000000000
+SLACK_ALLOWED_USERS=U0000000000,U0000000001
+ROC_STATE_DIR=/home/<you>/.local/state/roc-slack-door
+ROC_INBOX_SPACE=<inbox name>
+```
+
+Environment variables of the same names override the file. The door refuses to start and names
+whichever of the six are missing.
+
+### 4. Run it as a user service
+
+Build the binary (`cargo build --release -p roc-slack-door-server`), then put it under systemd:
+
+```ini
+# ~/.config/systemd/user/roc-slack-door.service
+[Unit]
+Description=roc-slack-door: Slack conversations as ikigai resources
+
+[Service]
+ExecStart=%h/src/ROC-slack-door/target/release/roc-slack-door --config %h/.config/roc-slack-door/door.env
+Restart=on-failure
+RestartSec=5
+
+[Install]
+WantedBy=default.target
+```
+
+```sh
+systemctl --user daemon-reload
+systemctl --user enable --now roc-slack-door
+journalctl --user -u roc-slack-door -f
+```
+
+The door writes its socket to `door.sock` in the state directory. The log should say
+`serving …/door.sock`; a `connection lost` line with `invalid_auth` means a token is wrong.
+
+### 5. Mount it from another kernel
+
+Another ikigai kernel mounts the socket under the Slack prefix and the inbox's space name:
+
+```sh
+ikigai --mount "urn:slack:=<state dir>/door.sock" --mount "urn:space:=<state dir>/door.sock"
+```
+
+The second mount is for the inbox (`urn:space:<inbox name>`). The socket serves both, so
+the same path is given twice. Only the machine that runs the door should hold the socket; the
+socket is not a network address, and it is not exposed beyond that machine.
 
 ## The spec is the tests
 
