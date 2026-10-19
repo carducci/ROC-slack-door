@@ -68,11 +68,13 @@ pub struct Message {
     pub text: String,
 }
 
-/// Something a person did in the channel that the door hears about.
+/// Something a person did in the channel that the door hears about. `id` is Slack's id for the
+/// event; Slack repeats it when it redelivers the event.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum Event {
     /// A message. `thread` is the timestamp of the message it replies to, if any.
     Message {
+        id: String,
         channel: String,
         user: String,
         ts: String,
@@ -81,11 +83,21 @@ pub enum Event {
     },
     /// A reaction added to the message at `message`.
     Reaction {
+        id: String,
         channel: String,
         user: String,
         message: String,
         name: String,
     },
+}
+
+impl Event {
+    /// Slack's id for the event.
+    pub fn id(&self) -> &str {
+        match self {
+            Event::Message { id, .. } | Event::Reaction { id, .. } => id,
+        }
+    }
 }
 
 /// The longest thread key the caller may choose.
@@ -294,6 +306,7 @@ impl FakeSlack {
             ts,
             thread,
             text,
+            ..
         } = &event
         {
             self.history.push(Stored {
@@ -416,6 +429,7 @@ mod tests {
         let mut slack = FakeSlack::new();
         let root = slack.post("C1", None, "Blocked on a token").unwrap();
         slack.feed(Event::Message {
+            id: "Ev1".to_owned(),
             channel: "C1".to_owned(),
             user: "U1".to_owned(),
             ts: "1700000100.000001".to_owned(),
@@ -432,6 +446,7 @@ mod tests {
     fn fed_events_are_taken_once_in_order() {
         let mut slack = FakeSlack::new();
         let reaction = Event::Reaction {
+            id: "Ev2".to_owned(),
             channel: "C1".to_owned(),
             user: "U1".to_owned(),
             message: "1700000000.000001".to_owned(),
