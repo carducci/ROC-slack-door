@@ -75,6 +75,12 @@ impl<T: SlackTransport> Threads<T> {
         Ok(())
     }
 
+    /// Whether the key names a thread the door has opened.
+    pub fn exists(&self, key: &str) -> Result<bool, ThreadError> {
+        check_key(key).map_err(ThreadError::Refused)?;
+        Ok(self.threads.contains_key(key))
+    }
+
     /// The conversation the key names, the opening message first.
     pub fn read(&mut self, key: &str) -> Result<Vec<Entry>, ThreadError> {
         check_key(key).map_err(ThreadError::Refused)?;
@@ -235,6 +241,16 @@ mod tests {
         assert!(json.contains("\"bot\":true"));
         assert!(!json.contains("C1"));
         assert!(!json.contains(&root));
+    }
+
+    #[test]
+    fn a_key_exists_once_its_thread_is_opened() {
+        let dir = scratch("exists");
+        let mut threads = Threads::open(&dir, "C1", FakeSlack::new()).unwrap();
+        assert!(!threads.exists("carducci-54").unwrap());
+        threads.write("carducci-54", "Opening").unwrap();
+        assert!(threads.exists("carducci-54").unwrap());
+        assert!(matches!(threads.exists("item 54"), Err(ThreadError::Refused(Refusal::BadKey))));
     }
 
     #[test]
