@@ -5,3 +5,10 @@ version = 4
 [[package]]
 name = "roc-slack-door"
 version = "0.0.0"
+
+[[package]]
+name = "roc-slack-door-server"
+version = "0.0.0"
+dependencies = [
+ "roc-slack-door",
+]

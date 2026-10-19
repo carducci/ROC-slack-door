@@ -1,0 +1,16 @@
+[package]
+name = "roc-slack-door-server"
+version = "0.0.0"
+description = "The door: holds the Slack Socket Mode connection and serves roc-slack-door's resources for another kernel to mount"
+publish = false
+edition.workspace = true
+license.workspace = true
+repository.workspace = true
+authors.workspace = true
+
+[[bin]]
+name = "roc-slack-door"
+path = "src/main.rs"
+
+[dependencies]
+roc-slack-door = { path = "../slack" }
