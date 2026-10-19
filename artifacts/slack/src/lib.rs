@@ -9,7 +9,7 @@
 //! The transport, its in-memory fake and the thread resource are in place; reactions and the
 //! inbox are not yet.
 
-use std::collections::BTreeSet;
+use std::collections::{BTreeSet, VecDeque};
 
 mod conversation;
 mod threads;
@@ -214,11 +214,24 @@ pub struct FakeSlack {
     history: Vec<Stored>,
     reactions: BTreeSet<(String, String)>,
     events: Vec<Event>,
+    failures: VecDeque<TransportError>,
 }
 
 impl FakeSlack {
     pub fn new() -> Self {
         Self::default()
+    }
+
+    /// Makes the next call to the transport fail with `error`, as Slack would answer it.
+    pub fn fail_next(&mut self, error: TransportError) {
+        self.failures.push_back(error);
+    }
+
+    fn next_failure(&mut self) -> Result<(), TransportError> {
+        match self.failures.pop_front() {
+            Some(error) => Err(error),
+            None => Ok(()),
+        }
     }
 
     /// Every message the door's bot has posted so far, oldest first.
@@ -273,6 +286,7 @@ impl SlackTransport for FakeSlack {
         thread: Option<&str>,
         text: &str,
     ) -> Result<String, TransportError> {
+        self.next_failure()?;
         let ts = format!("1700000000.{:06}", self.history.len() + 1);
         self.history.push(Stored {
             channel: channel.to_owned(),
@@ -294,6 +308,7 @@ impl SlackTransport for FakeSlack {
         name: &str,
         add: bool,
     ) -> Result<(), TransportError> {
+        self.next_failure()?;
         if !self.history.iter().any(|stored| stored.message.ts == message) {
             return Err(TransportError::Rejected("message_not_found".to_owned()));
         }
@@ -307,6 +322,7 @@ impl SlackTransport for FakeSlack {
     }
 
     fn replies(&mut self, channel: &str, root: &str) -> Result<Vec<Message>, TransportError> {
+        self.next_failure()?;
         Ok(self
             .history
             .iter()
