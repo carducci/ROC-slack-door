@@ -26,10 +26,27 @@ pub struct Thread {
 pub enum ThreadError {
     /// The key is not a valid thread key; nothing was posted.
     Refused(Refusal),
-    /// Slack would not post the text.
+    /// Slack would not post the text, for a reason the caller must fix (a token or a permission).
     Transport(TransportError),
+    /// Slack is throttling the door or cannot be reached; retry, after `retry_after_secs` when
+    /// Slack gave one.
+    Unavailable { retry_after_secs: Option<u64> },
     /// The map could not be read or saved.
     State(io::Error),
+}
+
+/// Slack's transient failures are unavailable, carrying its retry-after; anything else is an
+/// error that names what Slack refused.
+fn from_transport(error: TransportError) -> ThreadError {
+    match error {
+        TransportError::RateLimited { retry_after_secs } => ThreadError::Unavailable {
+            retry_after_secs: Some(retry_after_secs),
+        },
+        TransportError::Unavailable(_) => ThreadError::Unavailable {
+            retry_after_secs: None,
+        },
+        rejected @ TransportError::Rejected(_) => ThreadError::Transport(rejected),
+    }
 }
 
 /// The threads a door holds, over one transport and one configured channel.
@@ -67,7 +84,7 @@ impl<T: SlackTransport> Threads<T> {
         let ts = self
             .transport
             .post(&self.channel, parent.as_deref(), text)
-            .map_err(ThreadError::Transport)?;
+            .map_err(from_transport)?;
         if parent.is_none() {
             let thread = Thread {
                 channel: self.channel.clone(),
@@ -97,7 +114,7 @@ impl<T: SlackTransport> Threads<T> {
             .ok_or(ThreadError::Refused(Refusal::NoThread))?;
         self.transport
             .react(&thread.channel, &thread.ts, name, add)
-            .map_err(ThreadError::Transport)
+            .map_err(from_transport)
     }
 
     /// Whether the key names a thread the door has opened.
@@ -118,7 +135,7 @@ impl<T: SlackTransport> Threads<T> {
         let messages = self
             .transport
             .replies(&thread.channel, &thread.ts)
-            .map_err(ThreadError::Transport)?;
+            .map_err(from_transport)?;
         Ok(messages.iter().map(Entry::from).collect())
     }
 
@@ -272,6 +289,38 @@ mod tests {
         assert!(json.contains("\"bot\":true"));
         assert!(!json.contains("C1"));
         assert!(!json.contains(&root));
+    }
+
+    #[test]
+    fn a_rate_limit_is_unavailable_with_slacks_retry_after() {
+        let dir = scratch("rate-limit");
+        let mut threads = Threads::open(&dir, "C1", FakeSlack::new()).unwrap();
+        threads.transport_mut().fail_next(TransportError::RateLimited { retry_after_secs: 30 });
+        let err = threads.write(&all(), "carducci-54", "Opening").unwrap_err();
+        assert!(matches!(err, ThreadError::Unavailable { retry_after_secs: Some(30) }));
+        assert!(threads.transport().posts().is_empty());
+    }
+
+    #[test]
+    fn an_outage_is_unavailable_without_a_retry_after() {
+        let dir = scratch("outage");
+        let mut threads = Threads::open(&dir, "C1", FakeSlack::new()).unwrap();
+        threads.write(&all(), "carducci-54", "Opening").unwrap();
+        threads.transport_mut().fail_next(TransportError::Unavailable("503".to_owned()));
+        let err = threads.read(&all(), "carducci-54").unwrap_err();
+        assert!(matches!(err, ThreadError::Unavailable { retry_after_secs: None }));
+    }
+
+    #[test]
+    fn a_rejected_token_is_an_error_that_names_what_slack_said() {
+        let dir = scratch("rejected");
+        let mut threads = Threads::open(&dir, "C1", FakeSlack::new()).unwrap();
+        threads.transport_mut().fail_next(TransportError::Rejected("invalid_auth".to_owned()));
+        let err = threads.write(&all(), "carducci-54", "Opening").unwrap_err();
+        assert!(matches!(
+            err,
+            ThreadError::Transport(TransportError::Rejected(ref why)) if why == "invalid_auth"
+        ));
     }
 
     #[test]
