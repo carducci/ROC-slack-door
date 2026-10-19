@@ -82,6 +82,17 @@ Never make a change only because the item expected one.
 - A command's exit status is the status of the LAST command in a pipeline: `tests | tail`
   reports `tail`'s success. Never pipe a command whose result you are trusting.
 - Stage the files you changed by name. `git add -A` picks up files that are not yours.
+- **Every commit uses Arlo's Commit Notation, as a microcommit**
+  (<https://github.com/RefactoringCombos/ArlosCommitNotation>): the summary starts
+  `<risk> <intention> `, e.g. `^ F Refuse a thread key with a space`.
+  - Risk: `.` proven safe (a tool or scripted refactoring, or tests- or tooling-only), `^`
+    validated (tests ran green, and an `F` or `B` changes 8 lines or fewer, tests included), `!`
+    risky (some known risk unchecked), `@` broken (a savepoint; may not build).
+  - Intention, exactly one per commit. Uppercase changes one behavior, lowercase none: `F`
+    feature, `B` bugfix, `r` refactoring, `d` documentation, and the extensions `e`
+    environment and tooling, `t` tests only, `s` spec. Never `@ @`.
+  - One intention per commit, as small as builds and passes; commit after every green step.
+    Choose the risk from what was verified, not hoped: no test run, no `^`.
 
 ## 5. Report with evidence; the dispatcher closes
 
