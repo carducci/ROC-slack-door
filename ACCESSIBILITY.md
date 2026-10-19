@@ -33,15 +33,19 @@ report a barrier. It is not a conformance claim.
 
 ## What it shows people
 
-- **The command-line client** (`artifacts/cli/`): plain lines of text on the terminal. No
-  color, no full-screen redraw, no prompt that waits for a key.
-- **The service** (`artifacts/service/`) answers JSON. Programs read it, not people.
+Nothing yet: no code has been built. When it is (`openspec/changes/slack-resources/`):
+
+- **The door** (`artifacts/door/`) writes plain lines of text to its log and to standard
+  error. No color, no full-screen redraw, no prompt that waits for a key.
+- **Slack messages** are the text the door's callers write, posted unchanged; the door adds no
+  formatting of its own, so what a conversation reads like is the caller's responsibility.
+- **The resources** answer JSON. Programs read it, not people.
 - Nothing else: no web page, no HTML, no picture.
 
 ## The rules that output follows
 
 - Meaning is in words, never in color or layout alone.
-- An error is one line on standard error that starts with the program's name (`library:`) and
+- An error is one line on standard error that starts with the program's name and
   says what was refused and why, and the exit status says the same thing to a script.
 - Answers go to standard output and errors to standard error, so a person can read either one
   alone.
