@@ -11,9 +11,7 @@ written against them can move to another chat system by swapping the door undern
 
 > **Status: proposed, not built.** The first change,
 > [`openspec/changes/slack-resources/`](openspec/changes/slack-resources/proposal.md), says what
-> this will do. There is no Slack code yet. The starter's library-lending sample
-> (`artifacts/service`, `artifacts/cli`, and the specs under `openspec/specs/`) stays until that
-> change's first task retires it.
+> this will do. There is no Slack code yet.
 
 ## The resources (proposed)
 

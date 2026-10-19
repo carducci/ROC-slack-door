@@ -13,7 +13,7 @@ openspec/
     └── archive/    finished changes, moved here intact by `openspec archive`
 ```
 
-Both halves are empty in the starter; the library-lending sample fills them. Nothing here
+`specs/` is empty until the first change, `slack-resources`, is archived into it. Nothing here
 needs OpenSpec's own CLI: the format is Markdown with fixed heading prefixes
 (`### Requirement:`, `#### Scenario:`), and the
 [gonk Book's spec part](https://ikigai-rs.github.io/ikigai-tutorial/gonk/spec/openspec.html)
