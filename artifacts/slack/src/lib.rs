@@ -10,6 +10,10 @@
 
 use std::collections::BTreeSet;
 
+mod threads;
+
+pub use threads::{Thread, ThreadError, Threads};
+
 /// What the door asks of Slack. The real implementation speaks the Web API and Socket Mode;
 /// the fake in this crate records what it is asked and answers from memory.
 pub trait SlackTransport {
