@@ -38,7 +38,29 @@ impl WebApi {
             .post(&url)
             .set("Authorization", &format!("Bearer {}", self.token))
             .send_json(body);
-        match response {
+        answered(response)
+    }
+
+    /// One Web API read method, with its arguments as the query string. `conversations.replies`
+    /// is called this way because a JSON body answered `invalid_arguments` on the live door
+    /// (ikigai-slack#38); the cause is inferred from that answer and not yet confirmed by Slack's
+    /// own docs.
+    fn call_get(&self, method: &str, query: &[(&str, &str)]) -> Result<Value, TransportError> {
+        let url = format!("{}/{method}", self.base_url);
+        let mut request = self
+            .agent
+            .get(&url)
+            .set("Authorization", &format!("Bearer {}", self.token));
+        for (name, value) in query {
+            request = request.query(name, value);
+        }
+        answered(request.call())
+    }
+}
+
+/// Reads one HTTP answer from a Web API call: its JSON when Slack said ok, its error otherwise.
+fn answered(response: Result<ureq::Response, ureq::Error>) -> Result<Value, TransportError> {
+    match response {
             Ok(response) => {
                 let value: Value = response
                     .into_json()
@@ -60,7 +82,6 @@ impl WebApi {
             Err(ureq::Error::Transport(transport)) => {
                 Err(TransportError::Unavailable(transport.to_string()))
             }
-        }
     }
 }
 
@@ -129,7 +150,7 @@ impl SlackTransport for WebApi {
     }
 
     fn replies(&mut self, channel: &str, root: &str) -> Result<Vec<Message>, TransportError> {
-        let value = self.call("conversations.replies", json!({ "channel": channel, "ts": root }))?;
+        let value = self.call_get("conversations.replies", &[("channel", channel), ("ts", root)])?;
         Ok(value["messages"]
             .as_array()
             .map(|messages| messages.iter().filter_map(message_from).collect())
@@ -167,6 +188,43 @@ mod tests {
     fn a_false_ok_is_slacks_error() {
         let refused = answer(json!({ "ok": false, "error": "missing_scope" }));
         assert_eq!(refused, Err(TransportError::Rejected("missing_scope".to_owned())));
+    }
+
+    /// Serves one request on a loopback port, recording its request line, and answers with `body`.
+    fn one_answer(body: &'static str) -> (String, std::thread::JoinHandle<String>) {
+        use std::io::{BufRead, BufReader, Write};
+        let listener = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
+        let base = format!("http://{}", listener.local_addr().unwrap());
+        let handle = std::thread::spawn(move || {
+            let (mut stream, _) = listener.accept().unwrap();
+            let mut reader = BufReader::new(stream.try_clone().unwrap());
+            let mut request_line = String::new();
+            reader.read_line(&mut request_line).unwrap();
+            let mut header = String::new();
+            while reader.read_line(&mut header).unwrap() > 2 {
+                header.clear();
+            }
+            let response = format!(
+                "HTTP/1.1 200 OK\r\nContent-Type: application/json\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{}",
+                body.len(),
+                body
+            );
+            stream.write_all(response.as_bytes()).unwrap();
+            request_line
+        });
+        (base, handle)
+    }
+
+    #[test]
+    fn replies_are_read_with_a_get_and_the_arguments_in_the_query() {
+        let (base, server) = one_answer(r#"{"ok":true,"messages":[]}"#);
+        let mut api = WebApi::new("xoxb-test", std::sync::mpsc::channel().1);
+        api.base_url = base;
+        api.replies("C1", "1700000000.000001").unwrap();
+        let request_line = server.join().unwrap();
+        assert!(request_line.starts_with("GET /conversations.replies?"), "{request_line}");
+        assert!(request_line.contains("channel=C1"), "{request_line}");
+        assert!(request_line.contains("ts=1700000000.000001"), "{request_line}");
     }
 
     #[test]
