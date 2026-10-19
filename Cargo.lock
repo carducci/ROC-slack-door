@@ -1349,6 +1349,9 @@ dependencies = [
 [[package]]
 name = "roc-slack-door"
 version = "0.0.0"
+dependencies = [
+ "serde_json",
+]
 
 [[package]]
 name = "roc-slack-door-server"
