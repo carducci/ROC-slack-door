@@ -75,6 +75,19 @@ impl<T: SlackTransport> Threads<T> {
         Ok(())
     }
 
+    /// Adds the reaction `name` to the opening message of the thread `key` names, or removes it
+    /// when `add` is false. A key with no thread is refused before Slack is called.
+    pub fn react(&mut self, key: &str, name: &str, add: bool) -> Result<(), ThreadError> {
+        check_key(key).map_err(ThreadError::Refused)?;
+        let thread = self
+            .threads
+            .get(key)
+            .ok_or(ThreadError::Refused(Refusal::NoThread))?;
+        self.transport
+            .react(&thread.channel, &thread.ts, name, add)
+            .map_err(ThreadError::Transport)
+    }
+
     /// Whether the key names a thread the door has opened.
     pub fn exists(&self, key: &str) -> Result<bool, ThreadError> {
         check_key(key).map_err(ThreadError::Refused)?;
@@ -241,6 +254,29 @@ mod tests {
         assert!(json.contains("\"bot\":true"));
         assert!(!json.contains("C1"));
         assert!(!json.contains(&root));
+    }
+
+    #[test]
+    fn a_reaction_marks_the_opening_message_and_can_be_removed() {
+        let dir = scratch("react");
+        let mut threads = Threads::open(&dir, "C1", FakeSlack::new()).unwrap();
+        threads.write("carducci-54", "Opening").unwrap();
+        let root = threads.transport().posts()[0].ts.clone();
+        threads.react("carducci-54", "white_check_mark", true).unwrap();
+        threads.react("carducci-54", "white_check_mark", true).unwrap();
+        assert_eq!(threads.transport().reactions().len(), 1);
+        assert!(threads.transport().reactions().contains(&(root, "white_check_mark".to_owned())));
+        threads.react("carducci-54", "white_check_mark", false).unwrap();
+        assert!(threads.transport().reactions().is_empty());
+    }
+
+    #[test]
+    fn a_reaction_on_a_key_with_no_thread_is_refused_and_nothing_is_added() {
+        let dir = scratch("react-none");
+        let mut threads = Threads::open(&dir, "C1", FakeSlack::new()).unwrap();
+        let err = threads.react("never-opened", "white_check_mark", true).unwrap_err();
+        assert!(matches!(err, ThreadError::Refused(Refusal::NoThread)));
+        assert!(threads.transport().reactions().is_empty());
     }
 
     #[test]
