@@ -6,7 +6,10 @@ use std::fs;
 use std::io::{self, Write};
 use std::path::{Path, PathBuf};
 
-use crate::{check_key, check_reaction, check_text, Entry, Refusal, SlackTransport, TransportError};
+use crate::{
+    check_key, check_reaction, check_text, Entry, Grants, Refusal, SlackTransport, TransportError,
+    POST, READ, REACT,
+};
 
 /// The map's file in the state directory: one thread per line, `key TAB channel TAB ts`.
 const MAP_FILE: &str = "threads.tsv";
@@ -56,7 +59,8 @@ impl<T: SlackTransport> Threads<T> {
 
     /// Writes `text` to the thread `key` names. A key with no thread opens one as a new top-level
     /// message and records it; a key with a thread replies in it.
-    pub fn write(&mut self, key: &str, text: &str) -> Result<(), ThreadError> {
+    pub fn write(&mut self, grants: &Grants, key: &str, text: &str) -> Result<(), ThreadError> {
+        grants.require(POST).map_err(ThreadError::Refused)?;
         check_key(key).map_err(ThreadError::Refused)?;
         check_text(text).map_err(ThreadError::Refused)?;
         let parent = self.threads.get(key).map(|thread| thread.ts.clone());
@@ -77,7 +81,14 @@ impl<T: SlackTransport> Threads<T> {
 
     /// Adds the reaction `name` to the opening message of the thread `key` names, or removes it
     /// when `add` is false. A key with no thread is refused before Slack is called.
-    pub fn react(&mut self, key: &str, name: &str, add: bool) -> Result<(), ThreadError> {
+    pub fn react(
+        &mut self,
+        grants: &Grants,
+        key: &str,
+        name: &str,
+        add: bool,
+    ) -> Result<(), ThreadError> {
+        grants.require(REACT).map_err(ThreadError::Refused)?;
         check_key(key).map_err(ThreadError::Refused)?;
         check_reaction(name).map_err(ThreadError::Refused)?;
         let thread = self
@@ -90,13 +101,15 @@ impl<T: SlackTransport> Threads<T> {
     }
 
     /// Whether the key names a thread the door has opened.
-    pub fn exists(&self, key: &str) -> Result<bool, ThreadError> {
+    pub fn exists(&self, grants: &Grants, key: &str) -> Result<bool, ThreadError> {
+        grants.require(READ).map_err(ThreadError::Refused)?;
         check_key(key).map_err(ThreadError::Refused)?;
         Ok(self.threads.contains_key(key))
     }
 
     /// The conversation the key names, the opening message first.
-    pub fn read(&mut self, key: &str) -> Result<Vec<Entry>, ThreadError> {
+    pub fn read(&mut self, grants: &Grants, key: &str) -> Result<Vec<Entry>, ThreadError> {
+        grants.require(READ).map_err(ThreadError::Refused)?;
         check_key(key).map_err(ThreadError::Refused)?;
         let thread = self
             .threads
@@ -156,7 +169,7 @@ fn parse(text: &str) -> io::Result<BTreeMap<String, Thread>> {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::{FakeSlack, MAX_MESSAGE_LEN};
+    use crate::{Event, FakeSlack, MAX_MESSAGE_LEN};
 
     /// A fresh, empty state directory for one test.
     fn scratch(name: &str) -> PathBuf {
@@ -165,11 +178,15 @@ mod tests {
         dir
     }
 
+    fn all() -> Grants {
+        Grants::all()
+    }
+
     #[test]
     fn a_first_write_opens_a_top_level_thread() {
         let dir = scratch("first-write");
         let mut threads = Threads::open(&dir, "C1", FakeSlack::new()).unwrap();
-        threads.write("carducci-54", "Blocked on a token").unwrap();
+        threads.write(&all(), "carducci-54", "Blocked on a token").unwrap();
         let posts = threads.transport().posts();
         assert_eq!(posts.len(), 1);
         assert_eq!(posts[0].thread, None);
@@ -180,8 +197,8 @@ mod tests {
     fn a_later_write_replies_in_the_thread() {
         let dir = scratch("reply");
         let mut threads = Threads::open(&dir, "C1", FakeSlack::new()).unwrap();
-        threads.write("carducci-54", "Opening").unwrap();
-        threads.write("carducci-54", "Here is the command").unwrap();
+        threads.write(&all(), "carducci-54", "Opening").unwrap();
+        threads.write(&all(), "carducci-54", "Here is the command").unwrap();
         let posts = threads.transport().posts();
         assert_eq!(posts[1].thread.as_deref(), Some(posts[0].ts.as_str()));
     }
@@ -190,12 +207,12 @@ mod tests {
     fn the_thread_survives_a_restart() {
         let dir = scratch("restart");
         let mut before = Threads::open(&dir, "C1", FakeSlack::new()).unwrap();
-        before.write("carducci-54", "Opening").unwrap();
+        before.write(&all(), "carducci-54", "Opening").unwrap();
         let opening = before.transport().posts()[0].ts.clone();
         drop(before);
 
         let mut after = Threads::open(&dir, "C1", FakeSlack::new()).unwrap();
-        after.write("carducci-54", "Still blocked").unwrap();
+        after.write(&all(), "carducci-54", "Still blocked").unwrap();
         assert_eq!(after.transport().posts()[0].thread.as_deref(), Some(opening.as_str()));
     }
 
@@ -203,7 +220,7 @@ mod tests {
     fn empty_and_whitespace_text_is_refused_and_nothing_is_posted() {
         let dir = scratch("empty-text");
         let mut threads = Threads::open(&dir, "C1", FakeSlack::new()).unwrap();
-        let err = threads.write("carducci-54", "  \n\t ").unwrap_err();
+        let err = threads.write(&all(), "carducci-54", "  \n\t ").unwrap_err();
         assert!(matches!(err, ThreadError::Refused(Refusal::EmptyMessage)));
         assert!(threads.transport().posts().is_empty());
     }
@@ -213,7 +230,7 @@ mod tests {
         let dir = scratch("long-text");
         let mut threads = Threads::open(&dir, "C1", FakeSlack::new()).unwrap();
         let too_long = "x".repeat(MAX_MESSAGE_LEN + 1);
-        let err = threads.write("carducci-54", &too_long).unwrap_err();
+        let err = threads.write(&all(), "carducci-54", &too_long).unwrap_err();
         assert!(matches!(err, ThreadError::Refused(Refusal::MessageTooLong)));
         assert!(threads.transport().posts().is_empty());
     }
@@ -222,7 +239,7 @@ mod tests {
     fn text_at_the_limit_is_accepted() {
         let dir = scratch("limit-text");
         let mut threads = Threads::open(&dir, "C1", FakeSlack::new()).unwrap();
-        threads.write("carducci-54", &"x".repeat(MAX_MESSAGE_LEN)).unwrap();
+        threads.write(&all(), "carducci-54", &"x".repeat(MAX_MESSAGE_LEN)).unwrap();
         assert_eq!(threads.transport().posts().len(), 1);
     }
 
@@ -230,16 +247,16 @@ mod tests {
     fn reading_a_thread_returns_the_opening_message_then_the_replies() {
         let dir = scratch("read");
         let mut threads = Threads::open(&dir, "C1", FakeSlack::new()).unwrap();
-        threads.write("carducci-54", "Blocked on a token").unwrap();
+        threads.write(&all(), "carducci-54", "Blocked on a token").unwrap();
         let root = threads.transport().posts()[0].ts.clone();
-        threads.transport_mut().feed(crate::Event::Message {
+        threads.transport_mut().feed(Event::Message {
             channel: "C1".to_owned(),
             user: "U1".to_owned(),
             ts: "1700000100.000001".to_owned(),
             thread: Some(root),
             text: "Which token?".to_owned(),
         });
-        let entries = threads.read("carducci-54").unwrap();
+        let entries = threads.read(&all(), "carducci-54").unwrap();
         assert_eq!(entries.len(), 2);
         assert!(entries[0].bot && entries[0].text == "Blocked on a token");
         assert!(!entries[1].bot && entries[1].user == "U1" && entries[1].text == "Which token?");
@@ -249,9 +266,9 @@ mod tests {
     fn the_json_reading_has_no_channel_or_message_ids() {
         let dir = scratch("read-json");
         let mut threads = Threads::open(&dir, "C1", FakeSlack::new()).unwrap();
-        threads.write("carducci-54", "Blocked on a token").unwrap();
+        threads.write(&all(), "carducci-54", "Blocked on a token").unwrap();
         let root = threads.transport().posts()[0].ts.clone();
-        let json = crate::to_json(&threads.read("carducci-54").unwrap());
+        let json = crate::to_json(&threads.read(&all(), "carducci-54").unwrap());
         assert!(json.contains("\"bot\":true"));
         assert!(!json.contains("C1"));
         assert!(!json.contains(&root));
@@ -261,13 +278,13 @@ mod tests {
     fn a_reaction_marks_the_opening_message_and_can_be_removed() {
         let dir = scratch("react");
         let mut threads = Threads::open(&dir, "C1", FakeSlack::new()).unwrap();
-        threads.write("carducci-54", "Opening").unwrap();
+        threads.write(&all(), "carducci-54", "Opening").unwrap();
         let root = threads.transport().posts()[0].ts.clone();
-        threads.react("carducci-54", "white_check_mark", true).unwrap();
-        threads.react("carducci-54", "white_check_mark", true).unwrap();
+        threads.react(&all(), "carducci-54", "white_check_mark", true).unwrap();
+        threads.react(&all(), "carducci-54", "white_check_mark", true).unwrap();
         assert_eq!(threads.transport().reactions().len(), 1);
         assert!(threads.transport().reactions().contains(&(root, "white_check_mark".to_owned())));
-        threads.react("carducci-54", "white_check_mark", false).unwrap();
+        threads.react(&all(), "carducci-54", "white_check_mark", false).unwrap();
         assert!(threads.transport().reactions().is_empty());
     }
 
@@ -275,7 +292,7 @@ mod tests {
     fn a_reaction_on_a_key_with_no_thread_is_refused_and_nothing_is_added() {
         let dir = scratch("react-none");
         let mut threads = Threads::open(&dir, "C1", FakeSlack::new()).unwrap();
-        let err = threads.react("never-opened", "white_check_mark", true).unwrap_err();
+        let err = threads.react(&all(), "never-opened", "white_check_mark", true).unwrap_err();
         assert!(matches!(err, ThreadError::Refused(Refusal::NoThread)));
         assert!(threads.transport().reactions().is_empty());
     }
@@ -284,9 +301,9 @@ mod tests {
     fn a_reaction_with_a_bad_name_is_refused_and_nothing_is_added() {
         let dir = scratch("react-bad-name");
         let mut threads = Threads::open(&dir, "C1", FakeSlack::new()).unwrap();
-        threads.write("carducci-54", "Opening").unwrap();
+        threads.write(&all(), "carducci-54", "Opening").unwrap();
         for name in ["White Check", "tada!", "", "Tada"] {
-            let err = threads.react("carducci-54", name, true).unwrap_err();
+            let err = threads.react(&all(), "carducci-54", name, true).unwrap_err();
             assert!(matches!(err, ThreadError::Refused(Refusal::BadReaction)));
         }
         assert!(threads.transport().reactions().is_empty());
@@ -296,17 +313,20 @@ mod tests {
     fn a_key_exists_once_its_thread_is_opened() {
         let dir = scratch("exists");
         let mut threads = Threads::open(&dir, "C1", FakeSlack::new()).unwrap();
-        assert!(!threads.exists("carducci-54").unwrap());
-        threads.write("carducci-54", "Opening").unwrap();
-        assert!(threads.exists("carducci-54").unwrap());
-        assert!(matches!(threads.exists("item 54"), Err(ThreadError::Refused(Refusal::BadKey))));
+        assert!(!threads.exists(&all(), "carducci-54").unwrap());
+        threads.write(&all(), "carducci-54", "Opening").unwrap();
+        assert!(threads.exists(&all(), "carducci-54").unwrap());
+        assert!(matches!(
+            threads.exists(&all(), "item 54"),
+            Err(ThreadError::Refused(Refusal::BadKey))
+        ));
     }
 
     #[test]
     fn reading_a_key_with_no_thread_is_refused() {
         let dir = scratch("read-none");
         let mut threads = Threads::open(&dir, "C1", FakeSlack::new()).unwrap();
-        let err = threads.read("never-opened").unwrap_err();
+        let err = threads.read(&all(), "never-opened").unwrap_err();
         assert!(matches!(err, ThreadError::Refused(Refusal::NoThread)));
     }
 
@@ -314,8 +334,39 @@ mod tests {
     fn a_bad_key_is_refused_and_nothing_is_posted() {
         let dir = scratch("bad-key");
         let mut threads = Threads::open(&dir, "C1", FakeSlack::new()).unwrap();
-        let err = threads.write("item 54", "Opening").unwrap_err();
+        let err = threads.write(&all(), "item 54", "Opening").unwrap_err();
         assert!(matches!(err, ThreadError::Refused(Refusal::BadKey)));
         assert!(threads.transport().posts().is_empty());
+    }
+
+    #[test]
+    fn posting_without_the_post_capability_is_refused_and_nothing_is_posted() {
+        let dir = scratch("no-post");
+        let mut threads = Threads::open(&dir, "C1", FakeSlack::new()).unwrap();
+        let read_only = Grants::new([READ]);
+        let err = threads.write(&read_only, "carducci-54", "Opening").unwrap_err();
+        assert!(matches!(err, ThreadError::Refused(Refusal::NotGranted(POST))));
+        assert!(threads.transport().posts().is_empty());
+    }
+
+    #[test]
+    fn reacting_without_the_react_capability_is_refused_and_nothing_is_added() {
+        let dir = scratch("no-react");
+        let mut threads = Threads::open(&dir, "C1", FakeSlack::new()).unwrap();
+        threads.write(&all(), "carducci-54", "Opening").unwrap();
+        let read_only = Grants::new([READ]);
+        let err = threads.react(&read_only, "carducci-54", "tada", true).unwrap_err();
+        assert!(matches!(err, ThreadError::Refused(Refusal::NotGranted(REACT))));
+        assert!(threads.transport().reactions().is_empty());
+    }
+
+    #[test]
+    fn reading_without_the_read_capability_is_refused() {
+        let dir = scratch("no-read");
+        let mut threads = Threads::open(&dir, "C1", FakeSlack::new()).unwrap();
+        threads.write(&all(), "carducci-54", "Opening").unwrap();
+        let post_only = Grants::new([POST]);
+        let err = threads.read(&post_only, "carducci-54").unwrap_err();
+        assert!(matches!(err, ThreadError::Refused(Refusal::NotGranted(READ))));
     }
 }
