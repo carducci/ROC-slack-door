@@ -70,12 +70,19 @@ pub enum Event {
 /// The longest thread key the caller may choose.
 pub const MAX_KEY_LEN: usize = 80;
 
+/// The longest text a message may carry, in characters.
+pub const MAX_MESSAGE_LEN: usize = 40_000;
+
 /// Why a resource refused a request, named as the specs name it.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum Refusal {
     /// A thread key is empty, longer than `MAX_KEY_LEN`, or has a character outside
     /// ASCII letters, digits, `.`, `_` and `-`.
     BadKey,
+    /// The text is empty or only whitespace.
+    EmptyMessage,
+    /// The text is longer than `MAX_MESSAGE_LEN` characters.
+    MessageTooLong,
 }
 
 impl Refusal {
@@ -83,7 +90,20 @@ impl Refusal {
     pub fn code(&self) -> &'static str {
         match self {
             Refusal::BadKey => "bad-key",
+            Refusal::EmptyMessage => "empty-message",
+            Refusal::MessageTooLong => "message-too-long",
         }
+    }
+}
+
+/// Checks a message's text and returns it unchanged when it may be posted.
+pub fn check_text(text: &str) -> Result<&str, Refusal> {
+    if text.trim().is_empty() {
+        Err(Refusal::EmptyMessage)
+    } else if text.chars().count() > MAX_MESSAGE_LEN {
+        Err(Refusal::MessageTooLong)
+    } else {
+        Ok(text)
     }
 }
 

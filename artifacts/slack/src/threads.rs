@@ -6,7 +6,7 @@ use std::fs;
 use std::io::{self, Write};
 use std::path::{Path, PathBuf};
 
-use crate::{check_key, Refusal, SlackTransport, TransportError};
+use crate::{check_key, check_text, Refusal, SlackTransport, TransportError};
 
 /// The map's file in the state directory: one thread per line, `key TAB channel TAB ts`.
 const MAP_FILE: &str = "threads.tsv";
@@ -58,6 +58,7 @@ impl<T: SlackTransport> Threads<T> {
     /// message and records it; a key with a thread replies in it.
     pub fn write(&mut self, key: &str, text: &str) -> Result<(), ThreadError> {
         check_key(key).map_err(ThreadError::Refused)?;
+        check_text(text).map_err(ThreadError::Refused)?;
         let parent = self.threads.get(key).map(|thread| thread.ts.clone());
         let ts = self
             .transport
@@ -116,7 +117,7 @@ fn parse(text: &str) -> io::Result<BTreeMap<String, Thread>> {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::FakeSlack;
+    use crate::{FakeSlack, MAX_MESSAGE_LEN};
 
     /// A fresh, empty state directory for one test.
     fn scratch(name: &str) -> PathBuf {
@@ -157,6 +158,33 @@ mod tests {
         let mut after = Threads::open(&dir, "C1", FakeSlack::new()).unwrap();
         after.write("carducci-54", "Still blocked").unwrap();
         assert_eq!(after.transport().posts()[0].thread.as_deref(), Some(opening.as_str()));
+    }
+
+    #[test]
+    fn empty_and_whitespace_text_is_refused_and_nothing_is_posted() {
+        let dir = scratch("empty-text");
+        let mut threads = Threads::open(&dir, "C1", FakeSlack::new()).unwrap();
+        let err = threads.write("carducci-54", "  \n\t ").unwrap_err();
+        assert!(matches!(err, ThreadError::Refused(Refusal::EmptyMessage)));
+        assert!(threads.transport().posts().is_empty());
+    }
+
+    #[test]
+    fn text_over_the_limit_is_refused_and_nothing_is_posted() {
+        let dir = scratch("long-text");
+        let mut threads = Threads::open(&dir, "C1", FakeSlack::new()).unwrap();
+        let too_long = "x".repeat(MAX_MESSAGE_LEN + 1);
+        let err = threads.write("carducci-54", &too_long).unwrap_err();
+        assert!(matches!(err, ThreadError::Refused(Refusal::MessageTooLong)));
+        assert!(threads.transport().posts().is_empty());
+    }
+
+    #[test]
+    fn text_at_the_limit_is_accepted() {
+        let dir = scratch("limit-text");
+        let mut threads = Threads::open(&dir, "C1", FakeSlack::new()).unwrap();
+        threads.write("carducci-54", &"x".repeat(MAX_MESSAGE_LEN)).unwrap();
+        assert_eq!(threads.transport().posts().len(), 1);
     }
 
     #[test]
