@@ -1,0 +1,12 @@
+[package]
+name = "roc-slack-door"
+version = "0.0.0"
+description = "Slack conversations as resources for ikigai: named threads, reactions and an inbox"
+publish = false
+edition.workspace = true
+license.workspace = true
+repository.workspace = true
+authors.workspace = true
+
+[lib]
+name = "roc_slack_door"

@@ -2,7 +2,7 @@
 # artifacts/door (the binary).
 [workspace]
 resolver = "2"
-members = []
+members = ["artifacts/slack"]
 
 # What every crate here shares; each one says `license.workspace = true` and so on.
 [workspace.package]
