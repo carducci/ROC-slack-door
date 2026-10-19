@@ -42,7 +42,7 @@ pub fn to_json(entries: &[Entry]) -> String {
 }
 
 /// The time in UTC of a Slack timestamp such as `1700000000.000100`.
-fn utc(ts: &str) -> String {
+pub(crate) fn utc(ts: &str) -> String {
     let secs: i64 = ts.split('.').next().and_then(|whole| whole.parse().ok()).unwrap_or(0);
     let (year, month, day) = civil(secs.div_euclid(86_400));
     let in_day = secs.rem_euclid(86_400);

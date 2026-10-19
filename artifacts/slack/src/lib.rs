@@ -12,9 +12,11 @@
 use std::collections::{BTreeSet, VecDeque};
 
 mod conversation;
+mod inbox;
 mod threads;
 
 pub use conversation::{to_json, Entry};
+pub use inbox::{Delivery, Inbox};
 pub use threads::{Thread, ThreadError, Threads};
 
 /// What the door asks of Slack. The real implementation speaks the Web API and Socket Mode;

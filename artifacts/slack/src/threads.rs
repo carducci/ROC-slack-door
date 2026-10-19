@@ -117,6 +117,14 @@ impl<T: SlackTransport> Threads<T> {
             .map_err(from_transport)
     }
 
+    /// The key of the thread whose opening message has timestamp `ts`, if the door opened one.
+    pub fn key_for(&self, ts: &str) -> Option<String> {
+        self.threads
+            .iter()
+            .find(|(_, thread)| thread.ts == ts)
+            .map(|(key, _)| key.clone())
+    }
+
     /// Whether the key names a thread the door has opened.
     pub fn exists(&self, grants: &Grants, key: &str) -> Result<bool, ThreadError> {
         grants.require(READ).map_err(ThreadError::Refused)?;
