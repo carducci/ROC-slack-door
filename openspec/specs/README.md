@@ -11,5 +11,5 @@ A spec is `## Purpose` (with its `Artifacts:` line) and `## Requirements`. Each
 and has at least one `#### Scenario:` written as **WHEN** / **THEN** steps a test could
 check. A spec says what is observable, never how it is built.
 
-Empty until the first change, slack-resources, is archived into it. OpenSpec looks for `spec.md` files in
-folders below this one, so this README is not read as a spec.
+Holds `slack-resources`, archived 2026-10-19 into `changes/archive/2026-10-19-slack-resources/`. OpenSpec
+looks for `spec.md` files in folders below this one, so this README is not read as a spec.
