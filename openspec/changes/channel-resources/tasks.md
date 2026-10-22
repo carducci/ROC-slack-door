@@ -2,7 +2,7 @@
 
 ## 1. Configuration (`door`, `slack`)
 
-- [ ] 1.1 Parse `SLACK_CHANNELS` and each channel's id and speakers, refusing a start with none, a bad or repeated name, a missing id or no speakers, and refusing the retired `SLACK_CHANNEL`, `SLACK_ALLOWED_USERS` and `ROC_INBOX_SPACE` by name (The host declares the channels)
+- [x] 1.1 Parse `SLACK_CHANNELS` and each channel's id and speakers, refusing a start with none, a bad or repeated name, a missing id or no speakers, and refusing the retired `SLACK_CHANNEL`, `SLACK_ALLOWED_USERS` and `ROC_INBOX_SPACE` by name (The host declares the channels)
 - [ ] 1.2 Refuse an undeclared channel name as `no-channel` on every resource, without calling Slack (The host declares the channels)
 
 ## 2. Threads and reactions (`slack`)
