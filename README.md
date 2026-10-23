@@ -10,7 +10,7 @@ timestamps, Socket Mode envelopes, retries, and rate limits stay behind the name
 written against them can move to another chat system by swapping the door underneath it.
 
 > **Status: built, not yet run against Slack.** The first change,
-> [`openspec/changes/slack-resources/`](openspec/changes/slack-resources/proposal.md), says what
+> [`slack-resources`](openspec/changes/archive/2026-10-19-slack-resources/proposal.md), says what
 > this does. The library, the door, and the Unix socket are in `main`; the live connection
 > and the first mount from another kernel are still to be checked by hand.
 
@@ -18,7 +18,7 @@ written against them can move to another chat system by swapping the door undern
 
 | Name | Verbs | What it is |
 |---|---|---|
-| `urn:slack:thread:{key}` | source, sink | A conversation, named by a key the caller chooses. The first write opens it as a new message in the channel; later writes reply in the thread. Reading returns the conversation as JSON, with no Slack ids in it. |
+| `urn:slack:thread:{key}` | source, sink, exists | A conversation, named by a key the caller chooses. The first write opens it as a new message in the channel; later writes reply in the thread. Reading returns the conversation as JSON, with no Slack ids in it. |
 | `urn:slack:thread:{key}:reaction:{name}` | sink, delete | A reaction on the thread's opening message (`white_check_mark`, for example). |
 | an inbox space ([ikigai-intray](https://crates.io/crates/ikigai-intray)) | the space's own | Where replies and reactions from allowed people land, tagged with the thread's key. A message that starts a new conversation lands with no key. |
 
@@ -26,10 +26,10 @@ Three capabilities gate the verbs: `urn:cap:slack:read`, `urn:cap:slack:post`, a
 `urn:cap:slack:react`. A host can let one caller read and another post.
 
 The specs say exactly what each resource does:
-[threads](openspec/changes/slack-resources/specs/threads/spec.md),
-[reactions](openspec/changes/slack-resources/specs/reactions/spec.md),
-[inbox](openspec/changes/slack-resources/specs/inbox/spec.md), and
-[configuration](openspec/changes/slack-resources/specs/configuration/spec.md).
+[threads](openspec/specs/threads/spec.md),
+[reactions](openspec/specs/reactions/spec.md),
+[inbox](openspec/specs/inbox/spec.md), and
+[configuration](openspec/specs/configuration/spec.md).
 
 ## Two pieces
 
@@ -137,10 +137,13 @@ ikigai --mount "urn:sd:=<state dir>/door.sock"
 ```
 
 Then it names the resources through the alias: `urn:sd:slack:thread:<key>` for a thread and
-`urn:sd:space:<inbox name>` for the inbox. One alias mount, because a mount strips its prefix
-(`urn:slack:thread:x` would reach the door as `urn:thread:x`, which it does not serve) and
-`urn:space:` is also served locally, so a mount there would never reach the door. Only the machine that runs the door should hold the socket; the
-socket is not a network address, and it is not exposed beyond that machine.
+`urn:sd:space:<inbox name>` for the inbox, and `urn:sd:slack:thread:<key>:reaction:<name>` for
+a reaction. One alias mount, because `--mount` strips its prefix (`urn:slack:thread:x` would
+reach the door as `urn:thread:x`, which it does not serve) and `urn:space:` is also served
+locally, so a mount there would never reach the door.
+
+Only the machine that runs the door should hold the socket; the socket is not a network
+address, and it is not exposed beyond that machine.
 
 ## The spec is the tests
 
