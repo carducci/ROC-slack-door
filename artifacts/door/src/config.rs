@@ -247,6 +247,15 @@ mod tests {
     }
 
     #[test]
+    fn a_channel_id_of_only_whitespace_stops_the_start_and_is_named() {
+        let expected = "channel fixme has no id: set SLACK_CHANNEL_FIXME_ID";
+        let file = parse_file(&format!("{GOOD}SLACK_CHANNEL_FIXME_ID=\"   \"\n"));
+        assert_eq!(only(refused(&file)), expected);
+        let env = |name: &str| (name == "SLACK_CHANNEL_FIXME_ID").then(|| "   ".to_owned());
+        assert_eq!(only(Config::resolve(&file_with(""), env).unwrap_err().0), expected);
+    }
+
+    #[test]
     fn a_channel_with_no_speakers_stops_the_start_and_is_named() {
         let mut file = file_with("");
         file.insert("SLACK_CHANNEL_FIXME_SPEAKERS".to_owned(), " , ".to_owned());
