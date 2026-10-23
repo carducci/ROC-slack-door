@@ -343,6 +343,34 @@ guide:one-agent-per-repository a harness:Guide ;
     harness:direction harness:feedforward ; harness:execution harness:inferential ;
     harness:stage harness:runtime ; harness:category harness:authoritySafety .
 
+guide:ask-dax-dont-guess a harness:Guide ;
+    rdfs:label "stop and ask, don't guess" ;
+    rdfs:comment "When the task contradicts the code or the spec, needs a decision it doesn't make, or would change files outside its scope, stop and ask Dax rather than guess." ;
+    harness:statedIn "AGENTS.md" ; harness:section "Ask Dax, don't guess" ;
+    harness:direction harness:feedforward ; harness:execution harness:inferential ;
+    harness:stage harness:runtime ; harness:category harness:authoritySafety .
+
+guide:ask-dax-draft-pr a harness:Guide ;
+    rdfs:label "a worker's pull request is a draft" ;
+    rdfs:comment "A worker opens its pull request as a draft with `gh pr create --draft` and never marks it ready for review." ;
+    harness:statedIn "AGENTS.md" ; harness:section "Ask Dax, don't guess" ;
+    harness:direction harness:feedforward ; harness:execution harness:inferential ;
+    harness:stage harness:runtime ; harness:category harness:authoritySafety .
+
+guide:ask-dax-question-format a harness:Guide ;
+    rdfs:label "a question for Dax" ;
+    rdfs:comment "To ask, commit and push, then put one question in the draft's description and in the report as `Question for Dax:`, with what raised it and the options and the preferred one, and stop." ;
+    harness:statedIn "AGENTS.md" ; harness:section "Ask Dax, don't guess" ;
+    harness:direction harness:feedforward ; harness:execution harness:inferential ;
+    harness:stage harness:runtime ; harness:category harness:authoritySafety .
+
+guide:ask-dax-continue-draft a harness:Guide ;
+    rdfs:label "continue a draft pull request" ;
+    rdfs:comment "When the dispatcher's notes say `Continue draft PR #N`, merge that draft's branch into yours first and begin the new draft's description with `Supersedes #N`." ;
+    harness:statedIn "AGENTS.md" ; harness:section "Ask Dax, don't guess" ;
+    harness:direction harness:feedforward ; harness:execution harness:inferential ;
+    harness:stage harness:runtime ; harness:category harness:authoritySafety .
+
 ctl:worker-refuses-root a harness:Control ;
     rdfs:label "worker: never as root" ;
     rdfs:comment "`tools/worker.py run` refuses to start as root: a worker runs as an account of its own, which is its boundary (worker/README.md)." ;
