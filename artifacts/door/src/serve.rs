@@ -10,7 +10,7 @@ use ikigai_core::{
     ArgRef, Capability, Endpoint, EndpointSpace, Error, Fallback, Invocation, Iri,
     Kernel, Representation, Request, Result, ReprType, Space, UriTemplate, Verb,
 };
-use roc_slack_door::{to_json, Grants, Refusal, SlackTransport, ThreadError, Threads, READ, POST, REACT};
+use roc_slack_door::{check_channel, to_json, Grants, Refusal, SlackTransport, ThreadError, Threads, READ, POST, REACT};
 
 use roc_slack_door::Delivery;
 
@@ -47,6 +47,13 @@ fn to_error(error: ThreadError) -> Error {
         },
         ThreadError::Refused(Refusal::NoThread) => {
             Error::NotFound("no thread is open under that key".to_owned())
+        }
+        ThreadError::Refused(refusal @ Refusal::NoChannel(_)) => {
+            let Refusal::NoChannel(name) = &refusal else { unreachable!() };
+            Error::NotFound(format!(
+                "{}: `{name}` is not a channel this door serves",
+                refusal.code()
+            ))
         }
         ThreadError::Refused(Refusal::NotGranted(scope)) => {
             Error::Denied(format!("this call needs `{scope}`"))
@@ -151,10 +158,38 @@ impl<T: SlackTransport + Send + 'static> Endpoint for ReactionEndpoint<T> {
     }
 }
 
+/// `urn:slack:channel:{rest}`: every name under a channel. A channel the host does not declare is
+/// refused as `no-channel` before Slack is called; a declared one is not served yet.
+pub struct ChannelEndpoint {
+    declared: Vec<String>,
+}
+
+#[async_trait]
+impl Endpoint for ChannelEndpoint {
+    async fn invoke(&self, inv: &Invocation<'_>) -> Result<Representation> {
+        let rest = inv.bindings.get("rest").unwrap_or_default();
+        let name = rest.split(':').next().unwrap_or_default();
+        check_channel(&self.declared, name)
+            .map_err(|refusal| to_error(ThreadError::Refused(refusal)))?;
+        Err(Error::NotFound(format!("`{rest}` is not served yet")))
+    }
+
+    fn name(&self) -> &str {
+        "urn:slack:channel"
+    }
+}
+
 /// The Slack resources. The reaction template is bound first: the thread template's final
 /// variable would otherwise take the whole reaction IRI as a key.
-pub fn slack_space<T: SlackTransport + Send + 'static>(threads: Shared<T>) -> EndpointSpace {
+pub fn slack_space<T: SlackTransport + Send + 'static>(
+    threads: Shared<T>,
+    declared: Vec<String>,
+) -> EndpointSpace {
     EndpointSpace::new()
+        .bind(
+            UriTemplate::parse("urn:slack:channel:{rest}").expect("a fixed template"),
+            ChannelEndpoint { declared },
+        )
         .bind(
             UriTemplate::parse("urn:slack:thread:{key}:reaction:{name}").expect("a fixed template"),
             ReactionEndpoint {
@@ -168,9 +203,13 @@ pub fn slack_space<T: SlackTransport + Send + 'static>(threads: Shared<T>) -> En
 }
 
 /// The kernel that serves both spaces: the Slack resources, and the intray spaces under `root`.
-pub fn kernel<T: SlackTransport + Send + 'static>(threads: Shared<T>, root: std::path::PathBuf) -> Kernel {
+pub fn kernel<T: SlackTransport + Send + 'static>(
+    threads: Shared<T>,
+    root: std::path::PathBuf,
+    declared: Vec<String>,
+) -> Kernel {
     let spaces: Vec<Arc<dyn Space>> = vec![
-        Arc::new(slack_space(threads)),
+        Arc::new(slack_space(threads, declared)),
         Arc::new(ikigai_intray::space(root)),
     ];
     Kernel::new(Arc::new(Fallback::new(spaces)))
@@ -238,6 +277,42 @@ fn literal(text: &str) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use roc_slack_door::FakeSlack;
+
+    fn door(name: &str) -> (Kernel, Shared<FakeSlack>) {
+        let dir = std::env::temp_dir().join(format!("roc-door-serve-{name}-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(&dir).unwrap();
+        let threads = Arc::new(Mutex::new(Threads::open(&dir, "C1", FakeSlack::new()).unwrap()));
+        let kernel = kernel(Arc::clone(&threads), dir.join("spaces"), vec!["gonk-chat".to_owned()]);
+        (kernel, threads)
+    }
+
+    fn issue(kernel: &Kernel, verb: Verb, iri: &str) -> Result<Representation> {
+        let mut request = Request::new(verb, Iri::parse(iri).unwrap());
+        if verb == Verb::Sink {
+            request = request.with_arg("content", ArgRef::Inline(b"hello".to_vec()));
+        }
+        futures_executor::block_on(kernel.issue(request, &Capability::root()))
+    }
+
+    #[test]
+    fn an_undeclared_channel_is_refused_on_every_verb_and_slack_is_not_called() {
+        let (kernel, threads) = door("undeclared");
+        for iri in [
+            "urn:slack:channel:random:thread:x",
+            "urn:slack:channel:random:thread:x:reaction:tada",
+            "urn:slack:channel:random:inbox",
+            "urn:slack:channel:random",
+        ] {
+            for verb in [Verb::Source, Verb::Sink, Verb::Delete] {
+                let error = issue(&kernel, verb, iri).unwrap_err().to_string();
+                assert!(error.contains("no-channel") && error.contains("random"), "{iri}: {error}");
+            }
+        }
+        assert!(threads.lock().unwrap().transport().posts().is_empty());
+        assert!(threads.lock().unwrap().transport().reactions().is_empty());
+    }
 
     #[test]
     fn a_message_tuple_carries_its_key_user_time_and_text() {
