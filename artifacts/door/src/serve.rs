@@ -217,6 +217,9 @@ impl Endpoint for ChannelEndpoint {
         let name = rest.split(':').next().unwrap_or_default();
         check_channel(&self.declared, name)
             .map_err(|refusal| to_error(ThreadError::Refused(refusal)))?;
+        if rest.split(':').skip(1).eq(["thread", ""]) {
+            return Err(to_error(ThreadError::Refused(Refusal::BadKey)));
+        }
         Err(Error::NotFound(format!("`{rest}` is not served yet")))
     }
 
