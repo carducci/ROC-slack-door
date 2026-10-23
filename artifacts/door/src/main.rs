@@ -39,9 +39,10 @@ fn main() -> ExitCode {
     };
     match Config::resolve(&file, |name| std::env::var(name).ok()) {
         Ok(config) => run(config),
-        Err(missing) => {
-            let names: Vec<&str> = missing.0;
-            eprintln!("roc-slack-door: refusing to start, missing: {}", names.join(", "));
+        Err(refused) => {
+            for problem in &refused.0 {
+                eprintln!("roc-slack-door: refusing to start: {problem}");
+            }
             ExitCode::from(2)
         }
     }
@@ -56,19 +57,23 @@ fn run(config: Config) -> ExitCode {
         return ExitCode::from(2);
     }
 
+    // Until the per-channel resources land (tasks 1.2 to 3.1), the door serves the first
+    // declared channel, and its inbox space is named for that channel.
+    let channel = config.channels[0].clone();
+
     let (events_tx, events_rx) = mpsc::channel();
     let app_token = config.app_token.clone();
     thread::spawn(move || socket::run(&app_token, &events_tx));
 
     let api = web_api::WebApi::new(&config.bot_token, events_rx);
-    let threads = match Threads::open(&config.state_dir, &config.channel, api) {
+    let threads = match Threads::open(&config.state_dir, &channel.id, api) {
         Ok(threads) => Arc::new(Mutex::new(threads)),
         Err(e) => {
             eprintln!("roc-slack-door: cannot open the thread map: {e}");
             return ExitCode::from(2);
         }
     };
-    let mut inbox = match Inbox::open(&config.state_dir, &config.channel, "", config.allowed_users.clone()) {
+    let mut inbox = match Inbox::open(&config.state_dir, &channel.id, "", channel.speakers.clone()) {
         Ok(inbox) => inbox,
         Err(e) => {
             eprintln!("roc-slack-door: cannot open the inbox: {e}");
@@ -109,7 +114,7 @@ fn run(config: Config) -> ExitCode {
                 .collect::<Vec<_>>()
         };
         for delivery in &deliveries {
-            if let Err(why) = serve::drop_delivery(&kernel, &config.inbox_space, delivery) {
+            if let Err(why) = serve::drop_delivery(&kernel, &channel.name, delivery) {
                 eprintln!("roc-slack-door: a delivery was not written to the inbox: {why}");
             }
         }
