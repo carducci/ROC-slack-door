@@ -122,6 +122,8 @@ pub enum Refusal {
     BadReaction,
     /// The caller does not hold the capability the verb needs.
     NotGranted(&'static str),
+    /// The channel name is not one the host declares.
+    NoChannel(String),
 }
 
 impl Refusal {
@@ -134,6 +136,7 @@ impl Refusal {
             Refusal::NoThread => "no-thread",
             Refusal::BadReaction => "bad-reaction",
             Refusal::NotGranted(_) => "not-granted",
+            Refusal::NoChannel(_) => "no-channel",
         }
     }
 }
@@ -170,6 +173,15 @@ impl Grants {
         } else {
             Err(Refusal::NotGranted(capability))
         }
+    }
+}
+
+/// Accepts a channel name only when the host declares it; otherwise refuses naming it.
+pub fn check_channel<'a>(declared: &[String], name: &'a str) -> Result<&'a str, Refusal> {
+    if declared.iter().any(|d| d == name) {
+        Ok(name)
+    } else {
+        Err(Refusal::NoChannel(name.to_owned()))
     }
 }
 
@@ -476,6 +488,15 @@ mod tests {
             assert!(!meta.description.contains("xoxb-"));
             assert!(!meta.description.contains("xapp-"));
         }
+    }
+
+    #[test]
+    fn an_undeclared_channel_is_refused_as_no_channel_naming_it() {
+        let declared = ["gonk-chat".to_owned()];
+        assert_eq!(check_channel(&declared, "gonk-chat"), Ok("gonk-chat"));
+        let err = check_channel(&declared, "random").unwrap_err();
+        assert_eq!(err.code(), "no-channel");
+        assert_eq!(err, Refusal::NoChannel("random".to_owned()));
     }
 
     #[test]

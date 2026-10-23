@@ -81,7 +81,12 @@ fn run(config: Config) -> ExitCode {
         }
     };
 
-    let kernel = Arc::new(serve::kernel(Arc::clone(&threads), config.state_dir.join("spaces")));
+    let declared = config.channels.iter().map(|c| c.name.clone()).collect();
+    let kernel = Arc::new(serve::kernel(
+        Arc::clone(&threads),
+        config.state_dir.join("spaces"),
+        declared,
+    ));
     let socket_path = config.state_dir.join("door.sock");
     println!("roc-slack-door: serving {}", socket_path.display());
     let serving = Arc::clone(&kernel);
