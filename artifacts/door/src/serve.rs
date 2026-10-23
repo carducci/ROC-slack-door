@@ -107,8 +107,17 @@ impl<T: SlackTransport + Send + 'static> Endpoint for ThreadEndpoint<T> {
                     .map_err(to_error)?;
                 Ok(ok_text("posted"))
             }
+            Verb::Exists => {
+                let open = self
+                    .threads
+                    .lock()
+                    .map_err(|_| Error::Endpoint("the thread map is poisoned".to_owned()))?
+                    .exists(&grants, key)
+                    .map_err(to_error)?;
+                Ok(ok_text(if open { "true" } else { "false" }))
+            }
             other => Err(Error::Endpoint(format!(
-                "urn:slack:thread takes source and sink, not {other:?}"
+                "urn:slack:thread takes source, sink and exists, not {other:?}"
             ))),
         }
     }
@@ -238,6 +247,27 @@ fn literal(text: &str) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use roc_slack_door::FakeSlack;
+
+    fn answer(kernel: &Kernel, verb: Verb, iri: &str) -> String {
+        let request = Request::new(verb, Iri::parse(iri).unwrap());
+        let reply = futures_executor::block_on(kernel.issue(request, &Capability::root())).unwrap();
+        String::from_utf8(reply.bytes.to_vec()).unwrap()
+    }
+
+    #[test]
+    fn exists_through_the_door_answers_for_a_closed_and_an_open_thread() {
+        let dir = std::env::temp_dir().join(format!("door-exists-{}", std::process::id()));
+        let threads = Threads::open(&dir.join("state"), "C1", FakeSlack::new()).unwrap();
+        let kernel = kernel(Arc::new(Mutex::new(threads)), dir.join("intray"));
+        let never = "urn:slack:thread:never-opened";
+        assert_eq!(answer(&kernel, Verb::Exists, never), "false\n");
+        let post = Request::new(Verb::Sink, Iri::parse("urn:slack:thread:k").unwrap())
+            .with_arg("content", ArgRef::Inline(b"hello".to_vec()));
+        futures_executor::block_on(kernel.issue(post, &Capability::root())).unwrap();
+        assert_eq!(answer(&kernel, Verb::Exists, "urn:slack:thread:k"), "true\n");
+        let _ = std::fs::remove_dir_all(&dir);
+    }
 
     #[test]
     fn a_message_tuple_carries_its_key_user_time_and_text() {
