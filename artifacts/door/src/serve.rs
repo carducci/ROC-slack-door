@@ -381,6 +381,25 @@ mod tests {
     }
 
     #[test]
+    fn an_empty_key_in_a_channel_is_refused_as_bad_key() {
+        let (kernel, _) = two_channel_door("empty-key");
+        let error = issue(&kernel, Verb::Sink, "urn:slack:channel:gonk-chat:thread:")
+            .unwrap_err()
+            .to_string();
+        assert!(error.contains("key") && !error.contains("not served"), "{error}");
+    }
+
+    #[test]
+    fn a_sink_without_text_to_an_undeclared_channel_is_refused_as_no_channel() {
+        let (kernel, _) = two_channel_door("no-text");
+        let request = Request::new(Verb::Sink, Iri::parse("urn:slack:channel:random:thread:x").unwrap());
+        let error = futures_executor::block_on(kernel.issue(request, &Capability::root()))
+            .unwrap_err()
+            .to_string();
+        assert!(error.contains("no-channel"), "{error}");
+    }
+
+    #[test]
     fn the_same_key_in_two_channels_opens_two_threads() {
         let (kernel, threads) = two_channel_door("two-channels");
         issue(&kernel, Verb::Sink, "urn:slack:channel:gonk-chat:thread:x").unwrap();
