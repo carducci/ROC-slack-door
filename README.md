@@ -18,7 +18,7 @@ written against them can move to another chat system by swapping the door undern
 
 | Name | Verbs | What it is |
 |---|---|---|
-| `urn:slack:thread:{key}` | source, sink, exists | A conversation, named by a key the caller chooses. The first write opens it as a new message in the channel; later writes reply in the thread. Reading returns the conversation as JSON, with no Slack ids in it. |
+| `urn:slack:thread:{key}` | source, sink | A conversation, named by a key the caller chooses. The first write opens it as a new message in the channel; later writes reply in the thread. Reading returns the conversation as JSON, with no Slack ids in it. |
 | `urn:slack:thread:{key}:reaction:{name}` | sink, delete | A reaction on the thread's opening message (`white_check_mark`, for example). |
 | an inbox space ([ikigai-intray](https://crates.io/crates/ikigai-intray)) | the space's own | Where replies and reactions from allowed people land, tagged with the thread's key. A message that starts a new conversation lands with no key. |
 
@@ -130,14 +130,16 @@ The door writes its socket to `door.sock` in the state directory. The log should
 
 ### 5. Mount it from another kernel
 
-Another ikigai kernel mounts the socket under the Slack prefix and the inbox's space name:
+Another ikigai kernel mounts the socket once, under an alias prefix:
 
 ```sh
-ikigai --mount "urn:slack:=<state dir>/door.sock" --mount "urn:space:=<state dir>/door.sock"
+ikigai --mount "urn:sd:=<state dir>/door.sock"
 ```
 
-The second mount is for the inbox (`urn:space:<inbox name>`). The socket serves both, so
-the same path is given twice. Only the machine that runs the door should hold the socket; the
+Then it names the resources through the alias: `urn:sd:slack:thread:<key>` for a thread and
+`urn:sd:space:<inbox name>` for the inbox. One alias mount, because a mount strips its prefix
+(`urn:slack:thread:x` would reach the door as `urn:thread:x`, which it does not serve) and
+`urn:space:` is also served locally, so a mount there would never reach the door. Only the machine that runs the door should hold the socket; the
 socket is not a network address, and it is not exposed beyond that machine.
 
 ## The spec is the tests
