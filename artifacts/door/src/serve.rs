@@ -238,6 +238,42 @@ fn literal(text: &str) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use roc_slack_door::FakeSlack;
+
+    fn door(name: &str) -> (Kernel, Shared<FakeSlack>) {
+        let dir = std::env::temp_dir().join(format!("roc-door-serve-{name}-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(&dir).unwrap();
+        let threads = Arc::new(Mutex::new(Threads::open(&dir, "C1", FakeSlack::new()).unwrap()));
+        let kernel = kernel(Arc::clone(&threads), dir.join("spaces"), vec!["gonk-chat".to_owned()]);
+        (kernel, threads)
+    }
+
+    fn issue(kernel: &Kernel, verb: Verb, iri: &str) -> Result<Representation> {
+        let mut request = Request::new(verb, Iri::parse(iri).unwrap());
+        if verb == Verb::Sink {
+            request = request.with_arg("content", ArgRef::Inline(b"hello".to_vec()));
+        }
+        futures_executor::block_on(kernel.issue(request, &Capability::root()))
+    }
+
+    #[test]
+    fn an_undeclared_channel_is_refused_on_every_verb_and_slack_is_not_called() {
+        let (kernel, threads) = door("undeclared");
+        for iri in [
+            "urn:slack:channel:random:thread:x",
+            "urn:slack:channel:random:thread:x:reaction:tada",
+            "urn:slack:channel:random:inbox",
+            "urn:slack:channel:random",
+        ] {
+            for verb in [Verb::Source, Verb::Sink, Verb::Delete] {
+                let error = issue(&kernel, verb, iri).unwrap_err().to_string();
+                assert!(error.contains("no-channel") && error.contains("random"), "{iri}: {error}");
+            }
+        }
+        assert!(threads.lock().unwrap().transport().posts().is_empty());
+        assert!(threads.lock().unwrap().transport().reactions().is_empty());
+    }
 
     #[test]
     fn a_message_tuple_carries_its_key_user_time_and_text() {
