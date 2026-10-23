@@ -177,7 +177,7 @@ impl<T: SlackTransport> Threads<T> {
     }
 
     /// The key of the thread whose opening message has timestamp `ts`, if the door opened one.
-    pub fn key_for(&self, ts: &str) -> Option<String> {
+    pub fn key_for(&self, _channel: &str, ts: &str) -> Option<String> {
         self.threads
             .iter()
             .find(|(_, thread)| thread.ts == ts)
