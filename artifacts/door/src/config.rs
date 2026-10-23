@@ -127,7 +127,7 @@ impl Config {
                 continue;
             }
             let prefix = key_prefix(&name);
-            let id = value(&format!("{prefix}_ID")).unwrap_or_default();
+            let id = value(&format!("{prefix}_ID")).unwrap_or_default().trim().to_owned();
             if id.is_empty() {
                 problems.push(format!("channel {name} has no id: set {prefix}_ID"));
             }
