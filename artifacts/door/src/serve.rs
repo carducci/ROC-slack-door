@@ -150,6 +150,8 @@ impl<T: SlackTransport + Send + 'static> Endpoint for ChannelThreadEndpoint<T> {
                 ))
             }
             Verb::Sink => {
+                check_channel(&self.declared, channel)
+                    .map_err(|refusal| to_error(ThreadError::Refused(refusal)))?;
                 let text = text_of(inv)?;
                 threads.write_in(&grants, channel, key, &text).map_err(to_error)?;
                 Ok(ok_text("posted"))
