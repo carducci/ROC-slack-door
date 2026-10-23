@@ -176,11 +176,12 @@ impl<T: SlackTransport> Threads<T> {
             .map_err(from_transport)
     }
 
-    /// The key of the thread whose opening message has timestamp `ts`, if the door opened one.
-    pub fn key_for(&self, _channel: &str, ts: &str) -> Option<String> {
+    /// The key of the thread in channel id `channel` whose opening message has timestamp `ts`, if
+    /// the door opened one: timestamps are unique only within a channel.
+    pub fn key_for(&self, channel: &str, ts: &str) -> Option<String> {
         self.threads
             .iter()
-            .find(|(_, thread)| thread.ts == ts)
+            .find(|(_, thread)| thread.channel == channel && thread.ts == ts)
             .map(|((_, key), _)| key.clone())
     }
 
