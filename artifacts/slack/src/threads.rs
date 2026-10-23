@@ -277,6 +277,19 @@ mod tests {
     }
 
     #[test]
+    fn key_for_tells_equal_timestamps_in_two_channels_apart() {
+        let dir = scratch("key-for");
+        let channels = [("a".to_owned(), "C1".to_owned()), ("b".to_owned(), "C2".to_owned())];
+        let mut threads = Threads::open_channels(&dir, &channels, FakeSlack::new()).unwrap();
+        for (channel, key) in [("C1", "one"), ("C2", "two")] {
+            let thread = Thread { channel: channel.to_owned(), ts: "1.0".to_owned() };
+            threads.threads.insert(slot(channel, key), thread);
+        }
+        assert_eq!(threads.key_for("C1", "1.0").as_deref(), Some("one"));
+        assert_eq!(threads.key_for("C2", "1.0").as_deref(), Some("two"));
+    }
+
+    #[test]
     fn a_first_write_opens_a_top_level_thread() {
         let dir = scratch("first-write");
         let mut threads = Threads::open(&dir, "C1", FakeSlack::new()).unwrap();
