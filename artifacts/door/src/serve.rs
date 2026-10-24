@@ -481,6 +481,53 @@ mod tests {
     }
 
     #[test]
+    fn a_thread_address_ending_in_inbox_is_refused_as_bad_key() {
+        let (kernel, threads) = two_channel_door("thread-inbox");
+        let error = issue(&kernel, Verb::Sink, "urn:slack:channel:gonk-chat:thread:x:inbox")
+            .unwrap_err()
+            .to_string();
+        assert!(error.contains("key") && !error.contains("no-channel"), "{error}");
+        assert!(threads.lock().unwrap().transport().posts().is_empty());
+    }
+
+    #[test]
+    fn a_reaction_named_inbox_is_added_to_the_thread() {
+        let (kernel, threads) = two_channel_door("reaction-inbox");
+        issue(&kernel, Verb::Sink, "urn:slack:channel:fixme:thread:k").unwrap();
+        issue(&kernel, Verb::Sink, "urn:slack:channel:fixme:thread:k:reaction:inbox").unwrap();
+        let threads = threads.lock().unwrap();
+        let ts = threads.transport().posts()[0].ts.clone();
+        assert_eq!(threads.transport().reactions().iter().collect::<Vec<_>>(), [&(ts, "inbox".to_owned())]);
+    }
+
+    #[test]
+    fn a_delete_aimed_at_one_tuple_takes_that_tuple_and_leaves_the_other() {
+        let (kernel, _) = two_channel_door("inbox-targeted");
+        drop_delivery(&kernel, "gonk-chat", &a_message("first-1", "U1", "one")).unwrap();
+        drop_delivery(&kernel, "gonk-chat", &a_message("second-2", "U2", "two")).unwrap();
+        let inbox = std::env::temp_dir()
+            .join(format!("roc-door-serve-inbox-targeted-{}", std::process::id()))
+            .join("spaces/gonk-chat/inbox");
+        let mut ids: Vec<String> = std::fs::read_dir(&inbox)
+            .unwrap()
+            .map(|e| e.unwrap().file_name().to_string_lossy().trim_end_matches(".tuple").to_owned())
+            .collect();
+        ids.sort();
+        assert_eq!(ids.len(), 2, "{ids:?}");
+        let text = |id: &str| {
+            std::fs::read_to_string(inbox.join(format!("{id}.tuple"))).unwrap()
+        };
+        let (kept, aimed) = (ids[0].clone(), ids[1].clone());
+        let aimed_text = text(&aimed);
+        let request = Request::new(Verb::Delete, Iri::parse("urn:slack:channel:gonk-chat:inbox").unwrap())
+            .with_arg("tuple", ArgRef::Inline(aimed.clone().into_bytes()));
+        let taken = futures_executor::block_on(kernel.issue(request, &Capability::root())).unwrap();
+        assert_eq!(String::from_utf8(taken.bytes.to_vec()).unwrap(), aimed_text);
+        assert!(inbox.join(format!("{kept}.tuple")).exists());
+        assert!(!inbox.join(format!("{aimed}.tuple")).exists());
+    }
+
+    #[test]
     fn a_key_with_a_space_in_a_channel_is_refused_as_bad_key() {
         let (kernel, threads) = two_channel_door("bad-key");
         let error = issue(&kernel, Verb::Sink, "urn:slack:channel:gonk-chat:thread:item%2054")
