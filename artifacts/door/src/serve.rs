@@ -165,6 +165,10 @@ impl<T: SlackTransport + Send + 'static> Endpoint for ChannelThreadEndpoint<T> {
                 threads.write_in(&grants, channel, key, &text).map_err(to_error)?;
                 Ok(ok_text("posted"))
             }
+            Verb::Exists => {
+                let open = threads.exists_in(&grants, channel, key).map_err(to_error)?;
+                Ok(ok_text(if open { "true" } else { "false" }))
+            }
             other => {
                 check_channel(&self.declared, channel)
                     .map_err(|refusal| to_error(ThreadError::Refused(refusal)))?;
