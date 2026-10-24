@@ -114,6 +114,15 @@ impl<T: SlackTransport> Threads<T> {
         self.write_at(grants, &id, key, text)
     }
 
+    /// Posts `text` as a new top-level message in the declared channel `channel`, in no thread.
+    pub fn announce(&mut self, grants: &Grants, channel: &str, text: &str) -> Result<(), ThreadError> {
+        let id = self.id_of(channel)?;
+        grants.require(POST).map_err(ThreadError::Refused)?;
+        check_text(text).map_err(ThreadError::Refused)?;
+        self.transport.post(&id, None, text).map_err(from_transport)?;
+        Ok(())
+    }
+
     /// `read` in the declared channel `channel`.
     pub fn read_in(
         &mut self,
