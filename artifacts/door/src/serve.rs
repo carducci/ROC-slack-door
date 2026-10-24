@@ -526,6 +526,19 @@ mod tests {
     }
 
     #[test]
+    fn a_sink_to_a_channel_thread_reaction_posts_nothing() {
+        let (kernel, threads) = two_channel_door("reaction-sink");
+        let request = Request::new(
+            Verb::Sink,
+            Iri::parse("urn:slack:channel:gonk-chat:thread:k:reaction:eyes").unwrap(),
+        )
+        .with_arg("content", ArgRef::Inline(b"hello".to_vec()));
+        let result = futures_executor::block_on(kernel.issue(request, &Capability::root()));
+        assert!(result.is_err());
+        assert!(threads.lock().unwrap().transport().posts().is_empty());
+    }
+
+    #[test]
     fn exists_through_the_door_answers_for_a_closed_and_an_open_thread() {
         let (kernel, _threads) = door("exists");
         let answer = |iri| {
