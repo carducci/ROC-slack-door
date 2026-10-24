@@ -218,7 +218,8 @@ impl<T: SlackTransport + Send + 'static> Endpoint for ReactionEndpoint<T> {
 }
 
 /// `urn:slack:channel:{rest}`: every name under a channel. A channel the host does not declare is
-/// refused as `no-channel` before Slack is called; a declared one is not served yet.
+/// refused as `no-channel` before Slack is called. A sink to a declared channel's own IRI posts
+/// a top-level message; anything else under it is not served yet.
 pub struct ChannelEndpoint<T: SlackTransport> {
     threads: Shared<T>,
     declared: Vec<String>,
