@@ -71,6 +71,9 @@ impl<T: SlackTransport> Threads<T> {
         channels: &[(String, String)],
         transport: T,
     ) -> io::Result<Self> {
+        if channels.is_empty() {
+            return Err(io::Error::new(io::ErrorKind::InvalidInput, "no channel declared"));
+        }
         fs::create_dir_all(state_dir)?;
         let threads = match fs::read_to_string(state_dir.join(MAP_FILE)) {
             Ok(text) => parse(&text)?,
