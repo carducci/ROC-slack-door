@@ -218,18 +218,31 @@ impl<T: SlackTransport + Send + 'static> Endpoint for ReactionEndpoint<T> {
 }
 
 /// `urn:slack:channel:{rest}`: every name under a channel. A channel the host does not declare is
-/// refused as `no-channel` before Slack is called; a declared one is not served yet.
-pub struct ChannelEndpoint {
+/// refused as `no-channel` before Slack is called. A sink to a declared channel's own IRI posts
+/// a top-level message; anything else under it is not served yet.
+pub struct ChannelEndpoint<T: SlackTransport> {
+    threads: Shared<T>,
     declared: Vec<String>,
 }
 
 #[async_trait]
-impl Endpoint for ChannelEndpoint {
+impl<T: SlackTransport + Send + 'static> Endpoint for ChannelEndpoint<T> {
     async fn invoke(&self, inv: &Invocation<'_>) -> Result<Representation> {
-        let rest = inv.bindings.get("rest").or(inv.bindings.get("name")).unwrap_or_default();
+        let bound_rest = inv.bindings.get("rest");
+        let rest = bound_rest.or(inv.bindings.get("name")).unwrap_or_default();
         let name = rest.split(':').next().unwrap_or_default();
         check_channel(&self.declared, name)
             .map_err(|refusal| to_error(ThreadError::Refused(refusal)))?;
+        if inv.request.verb == Verb::Sink && bound_rest.is_some_and(|rest| !rest.contains(':')) {
+            let text = text_of(inv)?;
+            let grants = grants_of(inv.capability);
+            self.threads
+                .lock()
+                .map_err(|_| Error::Endpoint("the thread map is poisoned".to_owned()))?
+                .announce(&grants, name, &text)
+                .map_err(to_error)?;
+            return Ok(ok_text("posted"));
+        }
         if rest.split(':').skip(1).eq(["thread", ""]) {
             return Err(to_error(ThreadError::Refused(Refusal::BadKey)));
         }
@@ -252,6 +265,7 @@ pub fn slack_space<T: SlackTransport + Send + 'static>(
             UriTemplate::parse("urn:slack:channel:{name}:thread:{key}:reaction:{reaction}")
                 .expect("a fixed template"),
             ChannelEndpoint {
+                threads: Arc::clone(&threads),
                 declared: declared.clone(),
             },
         )
@@ -264,7 +278,10 @@ pub fn slack_space<T: SlackTransport + Send + 'static>(
         )
         .bind(
             UriTemplate::parse("urn:slack:channel:{rest}").expect("a fixed template"),
-            ChannelEndpoint { declared },
+            ChannelEndpoint {
+                threads: Arc::clone(&threads),
+                declared,
+            },
         )
         .bind(
             UriTemplate::parse("urn:slack:thread:{key}:reaction:{name}").expect("a fixed template"),
@@ -468,6 +485,29 @@ mod tests {
     }
 
     #[test]
+    fn writing_to_a_channel_posts_a_top_level_message_that_no_key_names() {
+        let (kernel, threads) = two_channel_door("announce");
+        issue(&kernel, Verb::Sink, "urn:slack:channel:fixme").unwrap();
+        let threads = threads.lock().unwrap();
+        let posts = threads.transport().posts();
+        assert_eq!(posts.len(), 1);
+        assert_eq!((posts[0].channel.as_str(), posts[0].thread.as_deref()), ("C2", None));
+        assert_eq!(posts[0].text, "hello");
+        assert_eq!(threads.key_for("C2", &posts[0].ts), None);
+    }
+
+    #[test]
+    fn an_announcement_over_the_text_limit_is_refused_and_nothing_is_posted() {
+        let (kernel, threads) = two_channel_door("announce-long");
+        let too_long = vec![b'x'; roc_slack_door::MAX_MESSAGE_LEN + 1];
+        let request = Request::new(Verb::Sink, Iri::parse("urn:slack:channel:gonk-chat").unwrap())
+            .with_arg("content", ArgRef::Inline(too_long));
+        let result = futures_executor::block_on(kernel.issue(request, &Capability::root()));
+        assert!(result.is_err());
+        assert!(threads.lock().unwrap().transport().posts().is_empty());
+    }
+
+    #[test]
     fn an_undeclared_channel_is_refused_on_every_verb_and_slack_is_not_called() {
         let (kernel, threads) = door("undeclared");
         for iri in [
@@ -485,6 +525,19 @@ mod tests {
         assert!(error.contains("no-channel") && error.contains("random"), "{error}");
         assert!(threads.lock().unwrap().transport().posts().is_empty());
         assert!(threads.lock().unwrap().transport().reactions().is_empty());
+    }
+
+    #[test]
+    fn a_sink_to_a_channel_thread_reaction_posts_nothing() {
+        let (kernel, threads) = two_channel_door("reaction-sink");
+        let request = Request::new(
+            Verb::Sink,
+            Iri::parse("urn:slack:channel:gonk-chat:thread:k:reaction:eyes").unwrap(),
+        )
+        .with_arg("content", ArgRef::Inline(b"hello".to_vec()));
+        let result = futures_executor::block_on(kernel.issue(request, &Capability::root()));
+        assert!(result.is_err());
+        assert!(threads.lock().unwrap().transport().posts().is_empty());
     }
 
     #[test]
