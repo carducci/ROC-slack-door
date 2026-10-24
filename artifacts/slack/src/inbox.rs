@@ -292,6 +292,90 @@ mod tests {
         assert_eq!(inbox(&dir).deliver(event, &threads).unwrap(), None);
     }
 
+    /// Two declared channels: `gonk-chat` (C1, speaker U1) and `fixme` (C2, speaker U2), with the
+    /// thread `carducci-54` open in `gonk-chat`, and that thread's timestamp.
+    fn two_channels(name: &str) -> (Inbox, Threads<FakeSlack>, String) {
+        let dir = scratch(name);
+        let named = [("gonk-chat".to_owned(), "C1".to_owned()), ("fixme".to_owned(), "C2".to_owned())];
+        let mut threads = Threads::open_channels(&dir, &named, FakeSlack::new()).unwrap();
+        threads
+            .write_in(&Grants::all(), "gonk-chat", "carducci-54", "Blocked on a token")
+            .unwrap();
+        let root = threads.transport().posts()[0].ts.clone();
+        let channels = [
+            ("gonk-chat".to_owned(), "C1".to_owned(), vec!["U1".to_owned(), BOT.to_owned()]),
+            ("fixme".to_owned(), "C2".to_owned(), vec!["U2".to_owned()]),
+        ];
+        (Inbox::open_channels(&dir, BOT, &channels).unwrap(), threads, root)
+    }
+
+    #[test]
+    fn a_speakers_reply_lands_in_the_inbox_of_its_channel() {
+        let (mut inbox, threads, root) = two_channels("two-reply");
+        let event = reply("C1", "U1", Some(&root), "Use the fine-grained token");
+        let (channel, delivery) = inbox.deliver_to(event, &threads).unwrap().unwrap();
+        assert_eq!(channel, "gonk-chat");
+        assert!(matches!(delivery, Delivery::Message { key: Some(k), .. } if k == "carducci-54"));
+    }
+
+    #[test]
+    fn a_stranger_is_in_no_inbox() {
+        let (mut inbox, threads, root) = two_channels("two-stranger");
+        let event = reply("C1", "U9", Some(&root), "Hi");
+        assert_eq!(inbox.deliver_to(event, &threads).unwrap(), None);
+    }
+
+    #[test]
+    fn the_door_is_in_no_inbox_even_when_listed_as_a_speaker() {
+        let (mut inbox, threads, root) = two_channels("two-own");
+        let event = reply("C1", BOT, Some(&root), "Hi");
+        assert_eq!(inbox.deliver_to(event, &threads).unwrap(), None);
+    }
+
+    #[test]
+    fn a_speaker_of_one_channel_is_in_no_inbox_of_another() {
+        let (mut inbox, threads, root) = two_channels("two-cross");
+        let event = reply("C1", "U2", Some(&root), "Hi");
+        assert_eq!(inbox.deliver_to(event, &threads).unwrap(), None);
+    }
+
+    #[test]
+    fn an_undeclared_channel_is_in_no_inbox() {
+        let (mut inbox, threads, _) = two_channels("two-undeclared");
+        let event = reply("C3", "U1", None, "Hi");
+        assert_eq!(inbox.deliver_to(event, &threads).unwrap(), None);
+    }
+
+    #[test]
+    fn a_speaker_of_the_other_channel_lands_in_that_channels_inbox() {
+        let (mut inbox, threads, _) = two_channels("two-other");
+        let event = reply("C2", "U2", None, "bug: the save button overlaps the footer");
+        let (channel, _) = inbox.deliver_to(event, &threads).unwrap().unwrap();
+        assert_eq!(channel, "fixme");
+    }
+
+    #[test]
+    fn a_speakers_reaction_lands_in_the_inbox_of_its_channel() {
+        let (mut inbox, threads, root) = two_channels("two-reaction");
+        let event = Event::Reaction {
+            id: "Ev1".to_owned(),
+            channel: "C1".to_owned(),
+            user: "U1".to_owned(),
+            message: root,
+            name: "+1".to_owned(),
+        };
+        let (channel, delivery) = inbox.deliver_to(event, &threads).unwrap().unwrap();
+        assert_eq!(channel, "gonk-chat");
+        assert_eq!(
+            delivery,
+            Delivery::Reaction {
+                key: "carducci-54".to_owned(),
+                user: "U1".to_owned(),
+                name: "+1".to_owned(),
+            }
+        );
+    }
+
     #[test]
     fn a_redelivered_event_is_delivered_once_even_across_a_restart() {
         let dir = scratch("redeliver");
