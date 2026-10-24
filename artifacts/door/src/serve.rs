@@ -468,6 +468,29 @@ mod tests {
     }
 
     #[test]
+    fn writing_to_a_channel_posts_a_top_level_message_that_no_key_names() {
+        let (kernel, threads) = two_channel_door("announce");
+        issue(&kernel, Verb::Sink, "urn:slack:channel:fixme").unwrap();
+        let threads = threads.lock().unwrap();
+        let posts = threads.transport().posts();
+        assert_eq!(posts.len(), 1);
+        assert_eq!((posts[0].channel.as_str(), posts[0].thread.as_deref()), ("C2", None));
+        assert_eq!(posts[0].text, "hello");
+        assert_eq!(threads.key_for("C2", &posts[0].ts), None);
+    }
+
+    #[test]
+    fn an_announcement_over_the_text_limit_is_refused_and_nothing_is_posted() {
+        let (kernel, threads) = two_channel_door("announce-long");
+        let too_long = vec![b'x'; roc_slack_door::MAX_MESSAGE_LEN + 1];
+        let request = Request::new(Verb::Sink, Iri::parse("urn:slack:channel:gonk-chat").unwrap())
+            .with_arg("content", ArgRef::Inline(too_long));
+        let result = futures_executor::block_on(kernel.issue(request, &Capability::root()));
+        assert!(result.is_err());
+        assert!(threads.lock().unwrap().transport().posts().is_empty());
+    }
+
+    #[test]
     fn an_undeclared_channel_is_refused_on_every_verb_and_slack_is_not_called() {
         let (kernel, threads) = door("undeclared");
         for iri in [
