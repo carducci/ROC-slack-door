@@ -291,6 +291,12 @@ mod tests {
     }
 
     #[test]
+    fn open_channels_refuses_an_empty_channel_list() {
+        let result = Threads::open_channels(&scratch("no-channels"), &[], FakeSlack::new());
+        assert_eq!(result.err().map(|e| e.kind()), Some(io::ErrorKind::InvalidInput));
+    }
+
+    #[test]
     fn a_first_write_opens_a_top_level_thread() {
         let dir = scratch("first-write");
         let mut threads = Threads::open(&dir, "C1", FakeSlack::new()).unwrap();
