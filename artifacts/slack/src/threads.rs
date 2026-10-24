@@ -180,6 +180,19 @@ impl<T: SlackTransport> Threads<T> {
         self.react_at(grants, &id, key, name, add)
     }
 
+    /// `react` in the declared channel `channel`.
+    pub fn react_in(
+        &mut self,
+        grants: &Grants,
+        channel: &str,
+        key: &str,
+        name: &str,
+        add: bool,
+    ) -> Result<(), ThreadError> {
+        let id = self.id_of(channel)?;
+        self.react_at(grants, &id, key, name, add)
+    }
+
     fn react_at(
         &mut self,
         grants: &Grants,
