@@ -289,7 +289,9 @@ impl Endpoint for InboxEndpoint {
 }
 
 /// The Slack resources. The reaction template is bound first: the thread template's final
-/// variable would otherwise take the whole reaction IRI as a key.pub fn slack_space<T: SlackTransport + Send + 'static>(
+/// variable would otherwise take the whole reaction IRI as a key. The inbox template is bound
+/// after the channel's thread and reaction templates, so an address ending in `:inbox` that
+/// they match is theirs, and before the channel catch-all.pub fn slack_space<T: SlackTransport + Send + 'static>(
     threads: Shared<T>,
     declared: Vec<String>,
     root: std::path::PathBuf,
