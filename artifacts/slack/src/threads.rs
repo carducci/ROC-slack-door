@@ -566,17 +566,18 @@ mod tests {
 
     #[test]
     fn an_old_line_for_a_declared_channel_is_served_under_its_name() {
-        let dir = legacy_dir("legacy-served", "carducci-54\tC2\t1700000000.000001\n");
-        let mut threads = Threads::open_channels(&dir, &declared(), FakeSlack::new()).unwrap();
+        // The opening message is already in Slack, so the reply gets a ts of its own.
+        let mut slack = FakeSlack::new();
+        let root = slack.post("C2", None, "Opening").unwrap();
+        let dir = legacy_dir("legacy-served", &format!("carducci-54\tC2\t{root}\n"));
+        let mut threads = Threads::open_channels(&dir, &declared(), slack).unwrap();
         assert!(threads.exists_in(&all(), "ops", "carducci-54").unwrap());
         threads.write_in(&all(), "ops", "carducci-54", "Back again").unwrap();
-        let post = &threads.transport().posts()[0];
-        assert_eq!(post.thread.as_deref(), Some("1700000000.000001"));
+        let post = &threads.transport().posts()[1];
+        assert_eq!(post.thread.as_deref(), Some(root.as_str()));
+        assert_ne!(post.ts, root);
         threads.react_in(&all(), "ops", "carducci-54", "tada", true).unwrap();
-        assert!(threads
-            .transport()
-            .reactions()
-            .contains(&("1700000000.000001".to_owned(), "tada".to_owned())));
+        assert!(threads.transport().reactions().contains(&(root.clone(), "tada".to_owned())));
         assert!(threads.read_in(&all(), "ops", "carducci-54").is_ok());
         assert!(!threads.exists_in(&all(), "gonk-chat", "carducci-54").unwrap());
     }
