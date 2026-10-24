@@ -195,6 +195,14 @@ impl<T: SlackTransport> Threads<T> {
         Ok(self.threads.contains_key(&slot(&self.default_id(), key)))
     }
 
+    /// `exists` in the declared channel `channel`.
+    pub fn exists_in(&self, grants: &Grants, channel: &str, key: &str) -> Result<bool, ThreadError> {
+        let id = self.id_of(channel)?;
+        grants.require(READ).map_err(ThreadError::Refused)?;
+        check_key(key).map_err(ThreadError::Refused)?;
+        Ok(self.threads.contains_key(&slot(&id, key)))
+    }
+
     /// The conversation the key names, the opening message first.
     pub fn read(&mut self, grants: &Grants, key: &str) -> Result<Vec<Entry>, ThreadError> {
         let id = self.default_id();
