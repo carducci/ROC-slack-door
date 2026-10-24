@@ -454,6 +454,25 @@ mod tests {
         assert_eq!(posts[2].thread.as_deref(), Some(posts[1].ts.as_str()));
     }
 
+    #[test]
+    fn an_old_threads_line_is_served_at_its_channel_urn() {
+        let dir = std::env::temp_dir().join(format!("roc-door-serve-old-line-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(&dir).unwrap();
+        let mut slack = FakeSlack::new();
+        let root = slack.post("C1", None, "Opening").unwrap();
+        std::fs::write(dir.join("threads.tsv"), format!("carducci-54\tC1\t{root}\n")).unwrap();
+        let channels = [("gonk-chat".to_owned(), "C1".to_owned())];
+        let threads = Arc::new(Mutex::new(Threads::open_channels(&dir, &channels, slack).unwrap()));
+        let kernel = kernel(Arc::clone(&threads), dir.join("spaces"), vec!["gonk-chat".to_owned()]);
+        let iri = "urn:slack:channel:gonk-chat:thread:carducci-54";
+        issue(&kernel, Verb::Sink, iri).unwrap();
+        let posts = threads.lock().unwrap().transport().posts();
+        assert_eq!(posts[1].thread.as_deref(), Some(root.as_str()));
+        issue(&kernel, Verb::Source, iri).unwrap();
+        issue(&kernel, Verb::Sink, &format!("{iri}:reaction:tada")).unwrap();
+    }
+
     fn text_of_reply(reply: Representation) -> String {
         String::from_utf8(reply.bytes.to_vec()).unwrap()
     }
