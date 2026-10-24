@@ -427,6 +427,42 @@ mod tests {
         assert_eq!(posts[2].thread.as_deref(), Some(posts[1].ts.as_str()));
     }
 
+    fn text_of_reply(reply: Representation) -> String {
+        String::from_utf8(reply.bytes.to_vec()).unwrap()
+    }
+
+    #[test]
+    fn a_channel_thread_opens_then_replies_then_reads() {
+        let (kernel, threads) = two_channel_door("open-reply-read");
+        let iri = "urn:slack:channel:fixme:thread:k";
+        issue(&kernel, Verb::Sink, iri).unwrap();
+        issue(&kernel, Verb::Sink, iri).unwrap();
+        let posts = threads.lock().unwrap().transport().posts();
+        assert_eq!((posts[0].channel.as_str(), posts[0].thread.as_deref()), ("C2", None));
+        assert_eq!(posts[1].thread.as_deref(), Some(posts[0].ts.as_str()));
+        let json = text_of_reply(issue(&kernel, Verb::Source, iri).unwrap());
+        assert!(json.contains("hello"), "{json}");
+    }
+
+    #[test]
+    fn a_key_known_in_one_channel_is_unknown_in_another() {
+        let (kernel, _) = two_channel_door("unknown-elsewhere");
+        issue(&kernel, Verb::Sink, "urn:slack:channel:gonk-chat:thread:k").unwrap();
+        let error = issue(&kernel, Verb::Source, "urn:slack:channel:fixme:thread:k")
+            .unwrap_err()
+            .to_string();
+        assert!(error.contains("no thread"), "{error}");
+    }
+
+    #[test]
+    fn exists_answers_per_channel() {
+        let (kernel, _) = two_channel_door("exists-per-channel");
+        issue(&kernel, Verb::Sink, "urn:slack:channel:gonk-chat:thread:k").unwrap();
+        let answer = |iri| text_of_reply(issue(&kernel, Verb::Exists, iri).unwrap());
+        assert_eq!(answer("urn:slack:channel:gonk-chat:thread:k"), "true\n");
+        assert_eq!(answer("urn:slack:channel:fixme:thread:k"), "false\n");
+    }
+
     #[test]
     fn an_undeclared_channel_is_refused_on_every_verb_and_slack_is_not_called() {
         let (kernel, threads) = door("undeclared");
