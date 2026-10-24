@@ -227,11 +227,12 @@ pub struct ChannelEndpoint<T: SlackTransport> {
 #[async_trait]
 impl<T: SlackTransport + Send + 'static> Endpoint for ChannelEndpoint<T> {
     async fn invoke(&self, inv: &Invocation<'_>) -> Result<Representation> {
-        let rest = inv.bindings.get("rest").or(inv.bindings.get("name")).unwrap_or_default();
+        let bound_rest = inv.bindings.get("rest");
+        let rest = bound_rest.or(inv.bindings.get("name")).unwrap_or_default();
         let name = rest.split(':').next().unwrap_or_default();
         check_channel(&self.declared, name)
             .map_err(|refusal| to_error(ThreadError::Refused(refusal)))?;
-        if inv.request.verb == Verb::Sink && !rest.contains(':') {
+        if inv.request.verb == Verb::Sink && bound_rest.is_some_and(|rest| !rest.contains(':')) {
             let text = text_of(inv)?;
             let grants = grants_of(inv.capability);
             self.threads
