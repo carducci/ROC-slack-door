@@ -173,7 +173,7 @@ impl<T: SlackTransport + Send + 'static> Endpoint for ChannelThreadEndpoint<T> {
                 check_channel(&self.declared, channel)
                     .map_err(|refusal| to_error(ThreadError::Refused(refusal)))?;
                 Err(Error::Endpoint(format!(
-                    "urn:slack:channel:{{name}}:thread takes source and sink, not {other:?}"
+                    "urn:slack:channel:{{name}}:thread takes source, sink and exists, not {other:?}"
                 )))
             }
         }
