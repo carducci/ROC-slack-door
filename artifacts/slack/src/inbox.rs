@@ -33,13 +33,20 @@ pub enum Delivery {
     },
 }
 
+/// One declared channel of the inbox: its name, its Slack id and the people who may be delivered.
+#[derive(Debug)]
+struct InboxChannel {
+    name: String,
+    id: String,
+    speakers: BTreeSet<String>,
+}
+
 /// The filter between Slack's events and the inbox: only allowed people, in the configured
 /// channel, never the door's own bot, and each event at most once across restarts.
 #[derive(Debug)]
 pub struct Inbox {
-    channel: String,
+    channels: Vec<InboxChannel>,
     bot_user: String,
-    allowed: BTreeSet<String>,
     state_file: PathBuf,
     delivered: BTreeSet<String>,
 }
@@ -52,6 +59,18 @@ impl Inbox {
         I: IntoIterator<Item = S>,
         S: Into<String>,
     {
+        let allowed = allowed.into_iter().map(Into::into).collect();
+        Self::open_channels(state_dir, bot_user, &[(String::new(), channel.to_owned(), allowed)])
+    }
+
+    /// An inbox for each declared channel, a (name, Slack id, speakers) triple, delivering from a
+    /// channel only what that channel's speakers say. The ids of delivered events are kept in
+    /// `state_dir`.
+    pub fn open_channels(
+        state_dir: &Path,
+        bot_user: &str,
+        channels: &[(String, String, Vec<String>)],
+    ) -> io::Result<Self> {
         fs::create_dir_all(state_dir)?;
         let state_file = state_dir.join(DELIVERED_FILE);
         let delivered = match fs::read_to_string(&state_file) {
@@ -60,9 +79,15 @@ impl Inbox {
             Err(e) => return Err(e),
         };
         Ok(Inbox {
-            channel: channel.to_owned(),
+            channels: channels
+                .iter()
+                .map(|(name, id, speakers)| InboxChannel {
+                    name: name.clone(),
+                    id: id.clone(),
+                    speakers: speakers.iter().cloned().collect(),
+                })
+                .collect(),
             bot_user: bot_user.to_owned(),
-            allowed: allowed.into_iter().map(Into::into).collect(),
             state_file,
             delivered,
         })
@@ -79,6 +104,15 @@ impl Inbox {
         event: Event,
         threads: &Threads<T>,
     ) -> io::Result<Option<Delivery>> {
+        Ok(self.deliver_to(event, threads)?.map(|(_, delivery)| delivery))
+    }
+
+    /// `deliver`, naming the declared channel whose inbox the delivery belongs to.
+    pub fn deliver_to<T: SlackTransport>(
+        &mut self,
+        event: Event,
+        threads: &Threads<T>,
+    ) -> io::Result<Option<(String, Delivery)>> {
         let event_id = event.id().to_owned();
         if self.delivered.contains(&event_id) {
             return Ok(None);
@@ -90,7 +124,11 @@ impl Inbox {
         Ok(Some(delivery))
     }
 
-    fn decide<T: SlackTransport>(&self, event: Event, threads: &Threads<T>) -> Option<Delivery> {
+    fn decide<T: SlackTransport>(
+        &self,
+        event: Event,
+        threads: &Threads<T>,
+    ) -> Option<(String, Delivery)> {
         match event {
             Event::Message {
                 channel,
@@ -100,16 +138,17 @@ impl Inbox {
                 text,
                 ..
             } => {
-                if !self.may_speak(&channel, &user) {
-                    return None;
-                }
+                let name = self.speaker_channel(&channel, &user)?;
                 let key = thread.as_deref().and_then(|root| threads.key_for(&channel, root));
-                Some(Delivery::Message {
-                    key,
-                    user,
-                    time: utc(&ts),
-                    text,
-                })
+                Some((
+                    name,
+                    Delivery::Message {
+                        key,
+                        user,
+                        time: utc(&ts),
+                        text,
+                    },
+                ))
             }
             Event::Reaction {
                 channel,
@@ -118,22 +157,20 @@ impl Inbox {
                 name,
                 ..
             } => {
-                if !self.may_speak(&channel, &user) {
-                    return None;
-                }
+                let channel_name = self.speaker_channel(&channel, &user)?;
                 let key = threads.key_for(&channel, &message)?;
-                Some(Delivery::Reaction { key, user, name })
+                Some((channel_name, Delivery::Reaction { key, user, name }))
             }
         }
     }
 
-    /// Whether a person in a channel may be delivered: the configured channel, an allowed
-    /// person, and not the door's own bot. A message with no user came from a bot.
-    fn may_speak(&self, channel: &str, user: &str) -> bool {
-        channel == self.channel
-            && !user.is_empty()
-            && user != self.bot_user
-            && self.allowed.contains(user)
+    /// The name of the declared channel `channel` (a Slack id) when `user` may be delivered from
+    /// it: one of that channel's speakers, and not the door's own bot. A message with no user
+    /// came from a bot.
+    fn speaker_channel(&self, channel: &str, user: &str) -> Option<String> {
+        let declared = self.channels.iter().find(|c| c.id == channel)?;
+        (!user.is_empty() && user != self.bot_user && declared.speakers.contains(user))
+            .then(|| declared.name.clone())
     }
 
     /// Appends the id to the delivered file, synced, before it is remembered in memory.
