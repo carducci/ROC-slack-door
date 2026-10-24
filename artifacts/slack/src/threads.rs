@@ -552,6 +552,63 @@ mod tests {
         assert!(threads.transport().reactions().is_empty());
     }
 
+    /// A state directory holding a `threads.tsv` in the format from before channels were named.
+    fn legacy_dir(name: &str, lines: &str) -> PathBuf {
+        let dir = scratch(name);
+        fs::create_dir_all(&dir).unwrap();
+        fs::write(dir.join(MAP_FILE), lines).unwrap();
+        dir
+    }
+
+    fn declared() -> [(String, String); 2] {
+        [("gonk-chat".to_owned(), "C1".to_owned()), ("ops".to_owned(), "C2".to_owned())]
+    }
+
+    #[test]
+    fn an_old_line_for_a_declared_channel_is_served_under_its_name() {
+        // The opening message is already in Slack, so the reply gets a ts of its own.
+        let mut slack = FakeSlack::new();
+        let root = slack.post("C2", None, "Opening").unwrap();
+        let dir = legacy_dir("legacy-served", &format!("carducci-54\tC2\t{root}\n"));
+        let mut threads = Threads::open_channels(&dir, &declared(), slack).unwrap();
+        assert!(threads.exists_in(&all(), "ops", "carducci-54").unwrap());
+        threads.write_in(&all(), "ops", "carducci-54", "Back again").unwrap();
+        let post = &threads.transport().posts()[1];
+        assert_eq!(post.thread.as_deref(), Some(root.as_str()));
+        assert_ne!(post.ts, root);
+        threads.react_in(&all(), "ops", "carducci-54", "tada", true).unwrap();
+        assert!(threads.transport().reactions().contains(&(root.clone(), "tada".to_owned())));
+        assert!(threads.read_in(&all(), "ops", "carducci-54").is_ok());
+        assert!(!threads.exists_in(&all(), "gonk-chat", "carducci-54").unwrap());
+    }
+
+    #[test]
+    fn an_old_line_for_an_undeclared_channel_is_kept_and_served_by_no_name() {
+        let line = "carducci-54\tC9\t1700000000.000001\n";
+        let dir = legacy_dir("legacy-undeclared", line);
+        let mut threads = Threads::open_channels(&dir, &declared(), FakeSlack::new()).unwrap();
+        for name in ["gonk-chat", "ops"] {
+            assert!(!threads.exists_in(&all(), name, "carducci-54").unwrap());
+        }
+        assert!(matches!(
+            threads.read_in(&all(), "C9", "carducci-54"),
+            Err(ThreadError::Refused(Refusal::NoChannel(_)))
+        ));
+        threads.write_in(&all(), "ops", "other", "Opening").unwrap();
+        drop(threads);
+        let saved = fs::read_to_string(dir.join(MAP_FILE)).unwrap();
+        assert!(saved.lines().any(|l| l == line.trim_end()));
+    }
+
+    #[test]
+    fn the_old_file_is_unchanged_after_a_restart() {
+        let text = "b\tC9\t1.0\na\tC1\t2.0\nc\tC2\t3.0\n";
+        let dir = legacy_dir("legacy-restart", text);
+        drop(Threads::open_channels(&dir, &declared(), FakeSlack::new()).unwrap());
+        drop(Threads::open_channels(&dir, &declared(), FakeSlack::new()).unwrap());
+        assert_eq!(fs::read_to_string(dir.join(MAP_FILE)).unwrap(), text);
+    }
+
     #[test]
     fn reading_without_the_read_capability_is_refused() {
         let dir = scratch("no-read");

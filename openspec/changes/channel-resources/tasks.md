@@ -11,7 +11,7 @@
 - [x] 2.2 Open, reply, read and refuse unknown keys per channel (Writing to a new key opens the thread)
 - [x] 2.3 Post a top-level message on a write to `urn:slack:channel:{name}` (Writing to a channel posts a new message)
 - [x] 2.4 Serve reactions as `urn:slack:channel:{name}:thread:{key}:reaction:{reaction}` (A reaction marks a thread's opening message)
-- [ ] 2.5 Serve existing `threads.tsv` lines under the declared channel whose id they carry (Threads opened before channels keep their keys)
+- [x] 2.5 Serve existing `threads.tsv` lines under the declared channel whose id they carry (Threads opened before channels keep their keys)
 
 ## 3. Inbox (`slack`, `door`)
 
