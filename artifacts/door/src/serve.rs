@@ -260,13 +260,49 @@ impl<T: SlackTransport + Send + 'static> Endpoint for ChannelEndpoint<T> {
     }
 }
 
+/// `urn:slack:channel:{name}:inbox`: the channel's inbox, which is the intray space of that name
+/// under the state directory. Source, sink and delete go to the space with the caller's capability.
+pub struct InboxEndpoint {
+    spaces: Kernel,
+    declared: Vec<String>,
+}
+
+#[async_trait]
+impl Endpoint for InboxEndpoint {
+    async fn invoke(&self, inv: &Invocation<'_>) -> Result<Representation> {
+        let name = inv.bindings.get("name").unwrap_or_default();
+        check_channel(&self.declared, name)
+            .map_err(|refusal| to_error(ThreadError::Refused(refusal)))?;
+        let target = Iri::parse(&format!("urn:space:{name}"))
+            .map_err(|e| Error::Endpoint(format!("{e:?}")))?;
+        let mut request = Request::new(inv.request.verb, target);
+        if inv.request.verb == Verb::Sink {
+            request = request.with_arg("content", ArgRef::Inline(text_of(inv)?.into_bytes()));
+        }
+        self.spaces.issue(request, inv.capability).await
+    }
+
+    fn name(&self) -> &str {
+        "urn:slack:channel:inbox"
+    }
+}
+
 /// The Slack resources. The reaction template is bound first: the thread template's final
 /// variable would otherwise take the whole reaction IRI as a key.
 pub fn slack_space<T: SlackTransport + Send + 'static>(
     threads: Shared<T>,
     declared: Vec<String>,
+    root: std::path::PathBuf,
 ) -> EndpointSpace {
+    let inbox = InboxEndpoint {
+        spaces: Kernel::new(Arc::new(ikigai_intray::space(root))),
+        declared: declared.clone(),
+    };
     EndpointSpace::new()
+        .bind(
+            UriTemplate::parse("urn:slack:channel:{name}:inbox").expect("a fixed template"),
+            inbox,
+        )
         .bind(
             UriTemplate::parse("urn:slack:channel:{name}:thread:{key}:reaction:{reaction}")
                 .expect("a fixed template"),
@@ -308,7 +344,7 @@ pub fn kernel<T: SlackTransport + Send + 'static>(
     declared: Vec<String>,
 ) -> Kernel {
     let spaces: Vec<Arc<dyn Space>> = vec![
-        Arc::new(slack_space(threads, declared)),
+        Arc::new(slack_space(threads, declared, root.clone())),
         Arc::new(ikigai_intray::space(root)),
     ];
     Kernel::new(Arc::new(Fallback::new(spaces)))
@@ -409,6 +445,39 @@ mod tests {
         let declared = vec!["gonk-chat".to_owned(), "fixme".to_owned()];
         let kernel = kernel(Arc::clone(&threads), dir.join("spaces"), declared);
         (kernel, threads)
+    }
+
+    fn a_message(key: &str, user: &str, text: &str) -> Delivery {
+        Delivery::Message {
+            key: Some(key.to_owned()),
+            user: user.to_owned(),
+            time: "1.5".to_owned(),
+            text: text.to_owned(),
+        }
+    }
+
+    #[test]
+    fn a_delivery_is_read_and_taken_at_the_channels_inbox_address() {
+        let (kernel, _) = two_channel_door("inbox-address");
+        drop_delivery(&kernel, "gonk-chat", &a_message("carducci-54", "U1", "hi")).unwrap();
+        let inbox = "urn:slack:channel:gonk-chat:inbox";
+        let text = |r: Result<Representation>| String::from_utf8(r.unwrap().bytes.to_vec()).unwrap();
+        let backing = text(issue(&kernel, Verb::Source, "urn:space:gonk-chat"));
+        assert_eq!(text(issue(&kernel, Verb::Source, inbox)), backing);
+        let taken = text(issue(&kernel, Verb::Delete, inbox));
+        assert!(taken.contains("carducci-54") && taken.contains("U1") && taken.contains("hi"), "{taken}");
+        let fixme = issue(&kernel, Verb::Source, "urn:slack:channel:fixme:inbox");
+        assert!(fixme.map_or(true, |r| r.bytes.to_vec() != backing.as_bytes()));
+    }
+
+    #[test]
+    fn a_thumbs_up_is_taken_at_the_channels_inbox_address() {
+        let (kernel, _) = two_channel_door("inbox-reaction");
+        let up = Delivery::Reaction { key: "carducci-54".to_owned(), user: "U1".to_owned(), name: "+1".to_owned() };
+        drop_delivery(&kernel, "gonk-chat", &up).unwrap();
+        let taken = issue(&kernel, Verb::Delete, "urn:slack:channel:gonk-chat:inbox").unwrap();
+        let taken = String::from_utf8(taken.bytes.to_vec()).unwrap();
+        assert!(taken.contains("slack:Reaction") && taken.contains("carducci-54") && taken.contains("+1"), "{taken}");
     }
 
     #[test]
