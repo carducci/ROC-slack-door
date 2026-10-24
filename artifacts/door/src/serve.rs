@@ -275,7 +275,8 @@ impl Endpoint for InboxEndpoint {
             .map_err(|refusal| to_error(ThreadError::Refused(refusal)))?;
         let target = Iri::parse(&format!("urn:space:{name}"))
             .map_err(|e| Error::Endpoint(format!("{e:?}")))?;
-        let mut request = Request::new(inv.request.verb, target);
+        let mut request = inv.request.clone();
+        request.target = target;
         if inv.request.verb == Verb::Sink {
             request = request.with_arg("content", ArgRef::Inline(text_of(inv)?.into_bytes()));
         }
