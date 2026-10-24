@@ -289,8 +289,7 @@ impl Endpoint for InboxEndpoint {
 }
 
 /// The Slack resources. The reaction template is bound first: the thread template's final
-/// variable would otherwise take the whole reaction IRI as a key.
-pub fn slack_space<T: SlackTransport + Send + 'static>(
+/// variable would otherwise take the whole reaction IRI as a key.pub fn slack_space<T: SlackTransport + Send + 'static>(
     threads: Shared<T>,
     declared: Vec<String>,
     root: std::path::PathBuf,
@@ -300,10 +299,6 @@ pub fn slack_space<T: SlackTransport + Send + 'static>(
         declared: declared.clone(),
     };
     EndpointSpace::new()
-        .bind(
-            UriTemplate::parse("urn:slack:channel:{name}:inbox").expect("a fixed template"),
-            inbox,
-        )
         .bind(
             UriTemplate::parse("urn:slack:channel:{name}:thread:{key}:reaction:{reaction}")
                 .expect("a fixed template"),
@@ -318,6 +313,10 @@ pub fn slack_space<T: SlackTransport + Send + 'static>(
                 threads: Arc::clone(&threads),
                 declared: declared.clone(),
             },
+        )
+        .bind(
+            UriTemplate::parse("urn:slack:channel:{name}:inbox").expect("a fixed template"),
+            inbox,
         )
         .bind(
             UriTemplate::parse("urn:slack:channel:{rest}").expect("a fixed template"),
