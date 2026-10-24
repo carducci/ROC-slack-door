@@ -219,17 +219,28 @@ impl<T: SlackTransport + Send + 'static> Endpoint for ReactionEndpoint<T> {
 
 /// `urn:slack:channel:{rest}`: every name under a channel. A channel the host does not declare is
 /// refused as `no-channel` before Slack is called; a declared one is not served yet.
-pub struct ChannelEndpoint {
+pub struct ChannelEndpoint<T: SlackTransport> {
+    threads: Shared<T>,
     declared: Vec<String>,
 }
 
 #[async_trait]
-impl Endpoint for ChannelEndpoint {
+impl<T: SlackTransport + Send + 'static> Endpoint for ChannelEndpoint<T> {
     async fn invoke(&self, inv: &Invocation<'_>) -> Result<Representation> {
         let rest = inv.bindings.get("rest").or(inv.bindings.get("name")).unwrap_or_default();
         let name = rest.split(':').next().unwrap_or_default();
         check_channel(&self.declared, name)
             .map_err(|refusal| to_error(ThreadError::Refused(refusal)))?;
+        if inv.request.verb == Verb::Sink && !rest.contains(':') {
+            let text = text_of(inv)?;
+            let grants = grants_of(inv.capability);
+            self.threads
+                .lock()
+                .map_err(|_| Error::Endpoint("the thread map is poisoned".to_owned()))?
+                .announce(&grants, name, &text)
+                .map_err(to_error)?;
+            return Ok(ok_text("posted"));
+        }
         if rest.split(':').skip(1).eq(["thread", ""]) {
             return Err(to_error(ThreadError::Refused(Refusal::BadKey)));
         }
@@ -252,6 +263,7 @@ pub fn slack_space<T: SlackTransport + Send + 'static>(
             UriTemplate::parse("urn:slack:channel:{name}:thread:{key}:reaction:{reaction}")
                 .expect("a fixed template"),
             ChannelEndpoint {
+                threads: Arc::clone(&threads),
                 declared: declared.clone(),
             },
         )
@@ -264,7 +276,10 @@ pub fn slack_space<T: SlackTransport + Send + 'static>(
         )
         .bind(
             UriTemplate::parse("urn:slack:channel:{rest}").expect("a fixed template"),
-            ChannelEndpoint { declared },
+            ChannelEndpoint {
+                threads: Arc::clone(&threads),
+                declared,
+            },
         )
         .bind(
             UriTemplate::parse("urn:slack:thread:{key}:reaction:{name}").expect("a fixed template"),
