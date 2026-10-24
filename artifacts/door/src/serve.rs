@@ -481,6 +481,8 @@ mod tests {
                 assert!(error.contains("no-channel") && error.contains("random"), "{iri}: {error}");
             }
         }
+        let error = issue(&kernel, Verb::Exists, "urn:slack:channel:random:thread:bad!key").unwrap_err().to_string();
+        assert!(error.contains("no-channel") && error.contains("random"), "{error}");
         assert!(threads.lock().unwrap().transport().posts().is_empty());
         assert!(threads.lock().unwrap().transport().reactions().is_empty());
     }
