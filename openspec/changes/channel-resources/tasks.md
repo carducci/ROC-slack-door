@@ -15,7 +15,7 @@
 
 ## 3. Inbox (`slack`, `door`)
 
-- [ ] 3.1 One inbox per channel at `urn:slack:channel:{name}:inbox`, filtered by that channel's speakers (Only allowed people, in the configured channel, are delivered)
+- [x] 3.1 One inbox per channel at `urn:slack:channel:{name}:inbox`, filtered by that channel's speakers (Only allowed people, in the configured channel, are delivered)
 - [ ] 3.2 Mint an `m-` key for a speaker's top-level message and record it as a thread (A speaker's top-level message opens a thread)
 
 ## 4. Capabilities (`slack`)
