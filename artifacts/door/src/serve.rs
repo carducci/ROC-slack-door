@@ -233,6 +233,12 @@ impl<T: SlackTransport + Send + 'static> Endpoint for ChannelEndpoint<T> {
         let name = rest.split(':').next().unwrap_or_default();
         check_channel(&self.declared, name)
             .map_err(|refusal| to_error(ThreadError::Refused(refusal)))?;
+        if let (Some(reaction), Verb::Sink | Verb::Delete) = (inv.bindings.get("reaction"), inv.request.verb) {
+            let (key, add) = (inv.bindings.get("key").unwrap_or_default(), inv.request.verb == Verb::Sink);
+            let mut threads = self.threads.lock().map_err(|_| Error::Endpoint("the thread map is poisoned".to_owned()))?;
+            threads.react_in(&grants_of(inv.capability), name, key, reaction, add).map_err(to_error)?;
+            return Ok(ok_text(if add { "reacted" } else { "unreacted" }));
+        }
         if inv.request.verb == Verb::Sink && bound_rest.is_some_and(|rest| !rest.contains(':')) {
             let text = text_of(inv)?;
             let grants = grants_of(inv.capability);
