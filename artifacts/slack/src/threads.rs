@@ -176,12 +176,37 @@ impl<T: SlackTransport> Threads<T> {
         name: &str,
         add: bool,
     ) -> Result<(), ThreadError> {
+        let id = self.default_id();
+        self.react_at(grants, &id, key, name, add)
+    }
+
+    /// `react` in the declared channel `channel`.
+    pub fn react_in(
+        &mut self,
+        grants: &Grants,
+        channel: &str,
+        key: &str,
+        name: &str,
+        add: bool,
+    ) -> Result<(), ThreadError> {
+        let id = self.id_of(channel)?;
+        self.react_at(grants, &id, key, name, add)
+    }
+
+    fn react_at(
+        &mut self,
+        grants: &Grants,
+        channel: &str,
+        key: &str,
+        name: &str,
+        add: bool,
+    ) -> Result<(), ThreadError> {
         grants.require(REACT).map_err(ThreadError::Refused)?;
         check_key(key).map_err(ThreadError::Refused)?;
         check_reaction(name).map_err(ThreadError::Refused)?;
         let thread = self
             .threads
-            .get(&slot(&self.default_id(), key))
+            .get(&slot(channel, key))
             .ok_or(ThreadError::Refused(Refusal::NoThread))?;
         self.transport
             .react(&thread.channel, &thread.ts, name, add)

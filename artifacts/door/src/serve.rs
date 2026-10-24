@@ -233,6 +233,12 @@ impl<T: SlackTransport + Send + 'static> Endpoint for ChannelEndpoint<T> {
         let name = rest.split(':').next().unwrap_or_default();
         check_channel(&self.declared, name)
             .map_err(|refusal| to_error(ThreadError::Refused(refusal)))?;
+        if let (Some(reaction), Verb::Sink | Verb::Delete) = (inv.bindings.get("reaction"), inv.request.verb) {
+            let (key, add) = (inv.bindings.get("key").unwrap_or_default(), inv.request.verb == Verb::Sink);
+            let mut threads = self.threads.lock().map_err(|_| Error::Endpoint("the thread map is poisoned".to_owned()))?;
+            threads.react_in(&grants_of(inv.capability), name, key, reaction, add).map_err(to_error)?;
+            return Ok(ok_text(if add { "reacted" } else { "unreacted" }));
+        }
         if inv.request.verb == Verb::Sink && bound_rest.is_some_and(|rest| !rest.contains(':')) {
             let text = text_of(inv)?;
             let grants = grants_of(inv.capability);
@@ -504,6 +510,60 @@ mod tests {
             .with_arg("content", ArgRef::Inline(too_long));
         let result = futures_executor::block_on(kernel.issue(request, &Capability::root()));
         assert!(result.is_err());
+        assert!(threads.lock().unwrap().transport().posts().is_empty());
+    }
+
+    #[test]
+    fn a_reaction_marks_the_threads_opening_message_and_posts_nothing_more() {
+        let (kernel, threads) = two_channel_door("react");
+        issue(&kernel, Verb::Sink, "urn:slack:channel:fixme:thread:k").unwrap();
+        let iri = "urn:slack:channel:fixme:thread:k:reaction:white_check_mark";
+        issue(&kernel, Verb::Sink, iri).unwrap();
+        issue(&kernel, Verb::Sink, iri).unwrap();
+        let threads = threads.lock().unwrap();
+        let posts = threads.transport().posts();
+        assert_eq!(posts.len(), 1);
+        let mark = (posts[0].ts.clone(), "white_check_mark".to_owned());
+        assert_eq!(threads.transport().reactions().iter().collect::<Vec<_>>(), [&mark]);
+    }
+
+    #[test]
+    fn deleting_a_channel_reaction_removes_it_and_removing_an_absent_one_succeeds() {
+        let (kernel, threads) = two_channel_door("unreact");
+        issue(&kernel, Verb::Sink, "urn:slack:channel:fixme:thread:k").unwrap();
+        let iri = "urn:slack:channel:fixme:thread:k:reaction:tada";
+        issue(&kernel, Verb::Sink, iri).unwrap();
+        issue(&kernel, Verb::Delete, iri).unwrap();
+        issue(&kernel, Verb::Delete, iri).unwrap();
+        assert!(threads.lock().unwrap().transport().reactions().is_empty());
+    }
+
+    #[test]
+    fn a_reaction_on_a_key_open_only_in_another_channel_is_refused_as_no_thread() {
+        let (kernel, threads) = two_channel_door("react-no-thread");
+        issue(&kernel, Verb::Sink, "urn:slack:channel:gonk-chat:thread:k").unwrap();
+        let error = issue(&kernel, Verb::Sink, "urn:slack:channel:fixme:thread:k:reaction:tada")
+            .unwrap_err()
+            .to_string();
+        assert!(error.contains("no thread"), "{error}");
+        assert!(threads.lock().unwrap().transport().reactions().is_empty());
+    }
+
+    #[test]
+    fn a_channel_reaction_with_a_bad_name_is_refused_and_nothing_is_added() {
+        let (kernel, threads) = two_channel_door("react-bad-name");
+        issue(&kernel, Verb::Sink, "urn:slack:channel:fixme:thread:k").unwrap();
+        let error = issue(&kernel, Verb::Sink, "urn:slack:channel:fixme:thread:k:reaction:Tada")
+            .unwrap_err()
+            .to_string();
+        assert!(error.contains("reaction"), "{error}");
+        assert!(threads.lock().unwrap().transport().reactions().is_empty());
+    }
+
+    #[test]
+    fn a_reaction_sink_never_posts_a_message() {
+        let (kernel, threads) = two_channel_door("react-no-post");
+        let _ = issue(&kernel, Verb::Sink, "urn:slack:channel:fixme:thread:k:reaction:tada");
         assert!(threads.lock().unwrap().transport().posts().is_empty());
     }
 
