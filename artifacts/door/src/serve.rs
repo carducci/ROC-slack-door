@@ -301,10 +301,6 @@ pub fn slack_space<T: SlackTransport + Send + 'static>(
     };
     EndpointSpace::new()
         .bind(
-            UriTemplate::parse("urn:slack:channel:{name}:inbox").expect("a fixed template"),
-            inbox,
-        )
-        .bind(
             UriTemplate::parse("urn:slack:channel:{name}:thread:{key}:reaction:{reaction}")
                 .expect("a fixed template"),
             ChannelEndpoint {
@@ -318,6 +314,10 @@ pub fn slack_space<T: SlackTransport + Send + 'static>(
                 threads: Arc::clone(&threads),
                 declared: declared.clone(),
             },
+        )
+        .bind(
+            UriTemplate::parse("urn:slack:channel:{name}:inbox").expect("a fixed template"),
+            inbox,
         )
         .bind(
             UriTemplate::parse("urn:slack:channel:{rest}").expect("a fixed template"),
