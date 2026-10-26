@@ -57,10 +57,6 @@ fn run(config: Config) -> ExitCode {
         return ExitCode::from(2);
     }
 
-    // Until the per-channel resources land (tasks 1.2 to 3.1), the door serves the first
-    // declared channel, and its inbox space is named for that channel.
-    let channel = config.channels[0].clone();
-
     let (events_tx, events_rx) = mpsc::channel();
     let app_token = config.app_token.clone();
     thread::spawn(move || socket::run(&app_token, &events_tx));
@@ -78,7 +74,12 @@ fn run(config: Config) -> ExitCode {
             return ExitCode::from(2);
         }
     };
-    let mut inbox = match Inbox::open(&config.state_dir, &channel.id, "", channel.speakers.clone()) {
+    let speaking: Vec<(String, String, Vec<String>)> = config
+        .channels
+        .iter()
+        .map(|c| (c.name.clone(), c.id.clone(), c.speakers.clone()))
+        .collect();
+    let mut inbox = match Inbox::open_channels(&config.state_dir, "", &speaking) {
         Ok(inbox) => inbox,
         Err(e) => {
             eprintln!("roc-slack-door: cannot open the inbox: {e}");
@@ -114,7 +115,7 @@ fn run(config: Config) -> ExitCode {
             let events = threads.transport_mut().take_events();
             events
                 .into_iter()
-                .filter_map(|event| match inbox.deliver(event, &*threads) {
+                .filter_map(|event| match inbox.deliver_to(event, &*threads) {
                     Ok(delivery) => delivery,
                     Err(e) => {
                         eprintln!("roc-slack-door: the inbox could not record an event: {e}");
@@ -123,8 +124,8 @@ fn run(config: Config) -> ExitCode {
                 })
                 .collect::<Vec<_>>()
         };
-        for delivery in &deliveries {
-            if let Err(why) = serve::drop_delivery(&kernel, &channel.name, delivery) {
+        for (name, delivery) in &deliveries {
+            if let Err(why) = serve::drop_delivery(&kernel, name, delivery) {
                 eprintln!("roc-slack-door: a delivery was not written to the inbox: {why}");
             }
         }
