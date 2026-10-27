@@ -7,6 +7,9 @@
 # Terms: .gonk/harness/vocabulary.ttl. Firings: .gonk/state/harness/firings.log (git-ignored).
 # `python3 tools/harness.py check` holds this file to the code and to AGENTS.md;
 # `python3 tools/gonk.py harness` loads it into gonk and asks .gonk/queries/harness-*.rq.
+# A guide's rdfs:comment paraphrases the rule it cites, so the check does not compare the two
+# word for word; every `quoted` word in it must be quoted in the cited section
+# (tools/harness.py#quoted says why).
 # FORMAT: the Turtle subset tools/harness.py reads. No blank nodes.
 
 @prefix harness: <https://ikigai-rs.dev/ns/harness#> .
@@ -247,7 +250,7 @@ guide:artifacts-line-true a harness:Guide ;
 
 guide:publish-through-init a harness:Guide ;
     rdfs:label "publish queries and scripts only through init" ;
-    rdfs:comment "Saved queries and scripts are published to gonk by `tools/gonk.py init` when gonk offers `urn:script:`, and not any other way." ;
+    rdfs:comment "Saved queries and scripts are published to gonk by `python3 tools/gonk.py init` when gonk offers `urn:script:`, and not any other way." ;
     harness:statedIn "AGENTS.md" ; harness:section "Specs, artifacts, queries and scripts" ;
     harness:direction harness:feedforward ; harness:execution harness:inferential ;
     harness:stage harness:toolCall ; harness:category harness:architectureFitness .

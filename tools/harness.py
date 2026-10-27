@@ -751,20 +751,58 @@ def check(repo: Path) -> list[str]:
             if code and (where, control_id(s)) not in emitted:
                 bad.append(f"{s.value}: enforcedAt {where}, which fires no `{control_id(s)}`")
 
-    # AGENTS.md: every guide cites a heading it has, and every rule heading has a guide.
-    agents = repo / "AGENTS.md"
-    if agents.is_file():
-        lines = agents.read_text(encoding="utf-8").splitlines()
-        headings = {ln[3:].strip() for ln in lines if ln.startswith("## ")}
-        cited = set()
-        for s in guides:
+    # The file each guide is stated in: it cites a heading the file has, and every word the
+    # guide quotes is quoted in that section. AGENTS.md: every rule heading has a guide.
+    cited = set()
+    for s in sorted(guides, key=lambda t: t.value):
+        for name in g.values(s, H + "statedIn"):
+            sections = read_sections(repo / name)
+            if sections is None:
+                bad.append(f"{s.value}: statedIn {name!r}, which is not in this repository")
+                continue
             for section in g.values(s, H + "section"):
-                cited.add(section)
-                if section not in headings:
-                    bad.append(f"{s.value}: section {section!r} is not a heading of AGENTS.md")
-        for heading in sorted(headings - cited - NON_RULE_HEADINGS):
+                if name == "AGENTS.md":
+                    cited.add(section)
+                if section not in sections:
+                    bad.append(f"{s.value}: section {section!r} is not a heading of {name}")
+                    continue
+                for quote in quoted(s, g):
+                    if quote not in sections[section]:
+                        bad.append(
+                            f"{s.value}: quotes {quote}, which {name} `## {section}` does not"
+                        )
+    agents = read_sections(repo / "AGENTS.md")
+    if agents is not None:
+        for heading in sorted(set(agents) - cited - NON_RULE_HEADINGS):
             bad.append(f"AGENTS.md: `## {heading}` states rules no guide in {GRAPH_FILE} names")
     return bad
+
+
+def read_sections(path: Path) -> dict[str, str] | None:
+    """The `## ` sections of a Markdown file, heading to body; None when there is no file."""
+    if not path.is_file():
+        return None
+    sections: dict[str, list[str]] = {}
+    body = None
+    for line in path.read_text(encoding="utf-8").splitlines():
+        if line.startswith("## "):
+            body = sections.setdefault(line[3:].strip(), [])
+        elif body is not None:
+            body.append(line)
+    return {heading: "\n".join(lines) for heading, lines in sections.items()}
+
+
+def quoted(s: I, g: Graph) -> list[str]:
+    """The words a guide quotes, each with its backticks: what its rdfs:comment must share
+    with the section it cites.
+
+    A guide's comment PARAPHRASES its rule in one sentence, so the two are not compared word
+    for word: a comment equal to its section would be the section again. What a guide puts in
+    backticks (a command, a flag, a file, a phrase to write) it claims is the rule's own text,
+    and that is checked: each quote is in the cited section, backticks and all, so a change to
+    either copy of a quoted word is a disagreement. A drift in the unquoted paraphrase is left
+    to the reviewer."""
+    return [m for c in g.values(s, RDFS + "comment") for m in re.findall(r"`[^`\n]+`", c)]
 
 
 # --------------------------------------------------------------------------- the commands
