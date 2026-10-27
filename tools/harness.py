@@ -732,7 +732,9 @@ def check(repo: Path) -> list[str]:
             path, _, name = where.partition("#")
             file, why = repo_file(root, path)
             if file is None:
-                bad.append(f"{s.value}: enforcedAt {where}, and {path} {why}")
+                # An empty path is seen only quoted, and named as what it is (ikigai-slack#234).
+                cited, named = (repr(where), "its path") if not path else (where, path)
+                bad.append(f"{s.value}: enforcedAt {cited}, and {named} {why}")
             elif name and not defined_in(file, name):
                 bad.append(f"{s.value}: enforcedAt {where}, and {path} has no {name}")
         if fires_into_log(g, s) and not g.values(s, H + "firedBy"):
@@ -836,7 +838,11 @@ def repo_file(root: Path, name: str) -> tuple[Path | None, str]:
     repository's root (as vocabulary.ttl defines both), or None and why. Refused as not relative,
     on every platform, wherever it points: a name that starts with / or \\ (POSIX absolute, UNC),
     or holds a colon (a drive letter, a URL, a colon in a directory's name). One that leaves the
-    repository through `..` or by a symlink names no file of it, and a NUL is no path at all."""
+    repository through `..` or by a symlink names no file of it, and a NUL is no path at all.
+    One that is in the repository but is no file (a directory, a FIFO) is refused as what it
+    is, and an empty name, which would resolve to the root, as empty (ikigai-slack#234)."""
+    if not name:
+        return None, "is empty"
     if name.startswith(("/", "\\")) or ":" in name or Path(name).is_absolute():
         return None, "is not a path relative to this repository's root"
     try:
@@ -845,8 +851,12 @@ def repo_file(root: Path, name: str) -> tuple[Path | None, str]:
         return None, "is not a path"
     if not path.is_relative_to(root):
         return None, "is outside this repository"
-    if not path.is_file():
+    if not path.exists():
         return None, "is not in this repository"
+    if path.is_dir():
+        return None, "is a directory, not a file"
+    if not path.is_file():
+        return None, "is not a file"
     return path, ""
 
 

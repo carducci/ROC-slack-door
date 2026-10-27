@@ -990,16 +990,25 @@ class ControlCodeTest(unittest.TestCase):
 
     def test_an_enforced_at_directory_is_a_directory_not_a_file(self) -> None:
         # ikigai-slack#234: `tools` is in the repository; what is wrong is that it is no file.
-        for where, path in (("tools", "tools"), ("tools/", "tools/"), ("tools#main", "tools")):
+        # Under tools/ (a code root) the sensor is also asked for a firing test, as it would be
+        # for a file there: that problem is its own, and this test only wants it not named as
+        # absent.
+        for where, path in (
+            ("tools", "tools"),
+            (".github/workflows", ".github/workflows"),
+            (".github/workflows/", ".github/workflows/"),
+            (".github/workflows#main", ".github/workflows"),
+        ):
             with self.subTest(where=where):
                 shutil.copy(ROOT / ".gonk/harness/harness.ttl", self.repo / ".gonk/harness/harness.ttl")
+                problems = self.enforced_at(where)
                 self.assertEqual(
-                    [
-                        f"{CONTROLS}ci-checks: enforcedAt {where}, and {path} "
-                        "is a directory, not a file"
-                    ],
-                    self.enforced_at(where),
+                    f"{CONTROLS}ci-checks: enforcedAt {where}, and {path} is a directory, not a file",
+                    problems[0],
                 )
+                self.assertEqual([], [p for p in problems if "not in this repository" in p])
+                if not where.startswith("tools"):
+                    self.assertEqual(1, len(problems), "\n".join(problems))
 
     def test_an_empty_enforced_at_is_empty(self) -> None:
         # ikigai-slack#234: an empty path resolves to the root, which is in the repository. It
@@ -1015,8 +1024,8 @@ class ControlCodeTest(unittest.TestCase):
     @unittest.skipUnless(hasattr(os, "mkfifo"), "a FIFO is made by os.mkfifo, POSIX only")
     def test_an_enforced_at_that_is_neither_file_nor_directory_is_not_a_file(self) -> None:
         # ikigai-slack#234: a FIFO is in the repository too, and is not a file.
-        os.mkfifo(self.repo / "tools" / "pipe")
-        where = "tools/pipe"
+        os.mkfifo(self.repo / ".github/workflows/pipe.yml")
+        where = ".github/workflows/pipe.yml"
         self.assertEqual(
             [f"{CONTROLS}ci-checks: enforcedAt {where}, and {where} is not a file"],
             self.enforced_at(where),
