@@ -368,8 +368,9 @@ fn parse(text: &str) -> io::Result<BTreeMap<(String, String), Thread>> {
         .map(|line| {
             let fields: Vec<&str> = line.split('\t').collect();
             match fields.as_slice() {
-                // The line's key and timestamp are held to the shapes record holds new ones to.
-                [key, channel, ts] if check_key(key).is_ok() && is_slack_ts(ts) => Ok((
+                // The line is held to the shapes record holds new ones to.
+                [key, channel, ts]
+                    if check_key(key).is_ok() && !has_control(channel) && is_slack_ts(ts) => Ok((
                     slot(channel, key),
                     Thread {
                         channel: (*channel).to_owned(),
@@ -830,6 +831,15 @@ mod tests {
     fn a_map_line_whose_timestamp_is_of_another_shape_is_refused_on_open() {
         for (n, bad) in ["abc", "1.2.3", "", "1700000100.000001 "].iter().enumerate() {
             let dir = legacy_dir(&format!("bad-line-{n}"), &format!("k\tC1\t{bad}\n"));
+            let err = Threads::open(&dir, "C1", FakeSlack::new()).err().unwrap();
+            assert_eq!(err.kind(), io::ErrorKind::InvalidData, "{bad:?}");
+        }
+    }
+
+    #[test]
+    fn a_map_line_whose_channel_id_has_a_control_character_is_refused_on_open() {
+        for (n, bad) in ["C1\rx", "C1\u{7f}", "C1\u{0}"].iter().enumerate() {
+            let dir = legacy_dir(&format!("bad-channel-line-{n}"), &format!("k\t{bad}\t1700000100.000001\n"));
             let err = Threads::open(&dir, "C1", FakeSlack::new()).err().unwrap();
             assert_eq!(err.kind(), io::ErrorKind::InvalidData, "{bad:?}");
         }
