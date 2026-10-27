@@ -133,7 +133,8 @@ class GuideTextTest(unittest.TestCase):
             self.assertEqual(1, n)
         if stated_in is not None:
             self.assertIn('harness:statedIn "AGENTS.md"', block)
-            block = block.replace('harness:statedIn "AGENTS.md"', f'harness:statedIn "{stated_in}"')
+            literal = harness.L(stated_in).nt()
+            block = block.replace('harness:statedIn "AGENTS.md"', f"harness:statedIn {literal}")
         path.write_text(text[:start] + block + text[end:], encoding="utf-8")
 
     def restore(self) -> None:
@@ -538,7 +539,21 @@ class GuideTextTest(unittest.TestCase):
         # ikigai-slack#197: refused whether it names a file outside the repository or inside.
         (self.outside / "x").mkdir()
         shutil.copy(self.repo / "AGENTS.md", self.outside / "x" / "RULES.md")
-        for name in (str(self.outside / "x" / "RULES.md"), str(self.repo / "AGENTS.md")):
+        (self.outside / "x:").mkdir()
+        shutil.copy(self.repo / "AGENTS.md", self.outside / "x:" / "RULES.md")
+        # ikigai-slack#235: a drive letter, a URL or any colon is not relative either, on every
+        # platform, and a path is written with / so it is one on every platform.
+        for name in (
+            (self.outside / "x" / "RULES.md").as_posix(),
+            (self.repo / "AGENTS.md").as_posix(),
+            (self.outside / "x:" / "RULES.md").as_posix(),
+            "C:/Windows/win.ini",
+            "C:\\x\\RULES.md",
+            "C:AGENTS.md",
+            "\\\\server\\share\\RULES.md",
+            "../x:/RULES.md",
+            "file:///etc/passwd",
+        ):
             with self.subTest(name=name):
                 self.restore()
                 self.guide("ask-dax-continue-draft", stated_in=name)
@@ -549,6 +564,14 @@ class GuideTextTest(unittest.TestCase):
                     ],
                     self.problems("ask-dax-continue-draft"),
                 )
+
+    def test_a_stated_in_path_with_a_nul_is_not_a_path(self) -> None:
+        # Finding 3 of ikigai-slack#235: a sentence, not a ValueError from resolve().
+        self.guide("ask-dax-continue-draft", stated_in="a\x00b")
+        self.assertEqual(
+            [f"{GUIDES}ask-dax-continue-draft: statedIn 'a\\x00b', which is not a path"],
+            self.problems("ask-dax-continue-draft"),
+        )
 
     def test_another_spelling_of_agents_md_is_agents_md(self) -> None:
         # P8 of ikigai-slack#187: the guide still cites `## 7. …` of AGENTS.md.
@@ -599,7 +622,8 @@ class ControlCodeTest(unittest.TestCase):
         end = text.index(" .\n", start)
         block = text[start:end]
         self.assertIn('harness:enforcedAt ".github/workflows/ci.yml"', block)
-        block = block.replace('harness:enforcedAt ".github/workflows/ci.yml"', f'harness:enforcedAt "{where}"')
+        literal = harness.L(where).nt()
+        block = block.replace('harness:enforcedAt ".github/workflows/ci.yml"', f"harness:enforcedAt {literal}")
         path.write_text(text[:start] + block + text[end:], encoding="utf-8")
         return [p for p in harness.check(self.repo) if p.startswith(CONTROLS + "ci-checks:")]
 
@@ -611,8 +635,23 @@ class ControlCodeTest(unittest.TestCase):
         )
 
     def test_an_absolute_enforced_at_path_is_not_relative_to_the_repository(self) -> None:
-        # Refused whether it names a file outside the repository or inside, as statedIn is.
-        for where in (str(self.outside / "x" / "ci.yml"), str(self.repo / ".github/workflows/ci.yml")):
+        # Refused whether it names a file outside the repository or inside, as statedIn is, and
+        # however it is spelled: a drive letter, a URL or any colon that is not `owner/repo:`
+        # (ikigai-slack#235). A path is written with / so it is one on every platform.
+        (self.outside / "x:").mkdir()
+        shutil.copy(self.outside / "x" / "ci.yml", self.outside / "x:" / "ci.yml")
+        for where in (
+            (self.outside / "x" / "ci.yml").as_posix(),
+            (self.repo / ".github/workflows/ci.yml").as_posix(),
+            (self.outside / "x:" / "ci.yml").as_posix(),
+            "C:/Windows/win.ini",
+            "C:\\x\\ci.yml",
+            "C:.github/workflows/ci.yml",
+            "\\\\server\\share\\ci.yml",
+            "../x:/ci.yml",
+            "../a:b/ci.yml",
+            "file:///etc/passwd",
+        ):
             with self.subTest(where=where):
                 shutil.copy(ROOT / ".gonk/harness/harness.ttl", self.repo / ".gonk/harness/harness.ttl")
                 self.assertEqual(
@@ -622,6 +661,21 @@ class ControlCodeTest(unittest.TestCase):
                     ],
                     self.enforced_at(where),
                 )
+
+    def test_an_enforced_at_path_with_a_nul_is_not_a_path(self) -> None:
+        # Finding 3 of ikigai-slack#235: a sentence, not a ValueError from resolve().
+        where = "a\x00b"
+        self.assertEqual(
+            [f"{CONTROLS}ci-checks: enforcedAt {where}, and {where} is not a path"],
+            self.enforced_at(where),
+        )
+
+    def test_an_enforced_at_in_another_repository_is_not_read_here(self) -> None:
+        # `owner/repo:path`, as vocabulary.ttl gives it, is the only form not read as a path here.
+        for where in ("carducci/ROC-slack-door:nowhere.yml", "ikigai-rs/ikigai-ledger:src/x.rs#f"):
+            with self.subTest(where=where):
+                shutil.copy(ROOT / ".gonk/harness/harness.ttl", self.repo / ".gonk/harness/harness.ttl")
+                self.assertEqual([], self.enforced_at(where))
 
     def test_an_enforced_at_file_that_is_not_here_still_fails(self) -> None:
         where = ".github/workflows/nowhere.yml"
