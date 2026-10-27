@@ -220,6 +220,15 @@ pub fn check_key(key: &str) -> Result<&str, Refusal> {
     }
 }
 
+/// Whether `ts` has the shape Slack's timestamps have: digits, one dot, digits.
+pub(crate) fn is_slack_ts(ts: &str) -> bool {
+    ts.split_once('.').is_some_and(|(seconds, micros)| {
+        [seconds, micros]
+            .iter()
+            .all(|part| !part.is_empty() && part.bytes().all(|b| b.is_ascii_digit()))
+    })
+}
+
 /// What a resource is, for a caller that asks. A description holds no secret.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct Meta {

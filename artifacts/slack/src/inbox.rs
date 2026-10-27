@@ -9,7 +9,7 @@ use std::io::{self, Write};
 use std::path::{Path, PathBuf};
 
 use crate::conversation::utc;
-use crate::{check_key, Event, SlackTransport, Threads};
+use crate::{check_key, is_slack_ts, Event, SlackTransport, Threads};
 
 /// The file in the state directory that lists the ids of events already delivered.
 const DELIVERED_FILE: &str = "delivered.txt";
@@ -48,15 +48,6 @@ struct InboxChannel {
 /// `m-1700000000-000001`.
 fn mint_key(ts: &str) -> String {
     format!("m-{}", ts.replace('.', "-"))
-}
-
-/// Whether `ts` has the shape Slack's timestamps have: digits, one dot, digits.
-fn is_slack_ts(ts: &str) -> bool {
-    ts.split_once('.').is_some_and(|(seconds, micros)| {
-        [seconds, micros]
-            .iter()
-            .all(|part| !part.is_empty() && part.bytes().all(|b| b.is_ascii_digit()))
-    })
 }
 
 /// The filter between Slack's events and the inbox: only allowed people, in the configured
