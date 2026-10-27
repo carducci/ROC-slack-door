@@ -577,9 +577,15 @@ def control_id(iri: I) -> str | None:
     return None
 
 
+# `owner/repo:path` in another repository, as vocabulary.ttl gives it: a GitHub owner (no dot,
+# so not `..`) and a repository name other than `.` or `..`.
+REMOTE = re.compile(r"[A-Za-z0-9-]+/(?!\.\.?:)[A-Za-z0-9_.-]+:.")
+
+
 def is_local(where: str) -> bool:
-    """`path[#name]` in this repository, rather than `owner/repo:path` in another."""
-    return ":" not in where.split("#", 1)[0]
+    """`path[#name]` in this repository, rather than `owner/repo:path` in another. Anything that
+    is not the remote form is local, so `repo_file` refuses a drive letter, a URL or a colon."""
+    return REMOTE.match(where.split("#", 1)[0]) is None
 
 
 def process_parts(repo: Path) -> set[str]:
@@ -827,12 +833,16 @@ def check(repo: Path) -> list[str]:
 
 def repo_file(root: Path, name: str) -> tuple[Path | None, str]:
     """The file a guide's statedIn or a control's enforcedAt names, resolved against the
-    repository's root (as vocabulary.ttl defines both), or None and why: an absolute path is
-    refused wherever it points, and one that leaves the repository through `..` or by a symlink
-    names no file of it."""
-    if Path(name).is_absolute():
+    repository's root (as vocabulary.ttl defines both), or None and why. Refused as not relative,
+    on every platform, wherever it points: a name that starts with / or \\ (POSIX absolute, UNC),
+    or holds a colon (a drive letter, a URL, a colon in a directory's name). One that leaves the
+    repository through `..` or by a symlink names no file of it, and a NUL is no path at all."""
+    if name.startswith(("/", "\\")) or ":" in name or Path(name).is_absolute():
         return None, "is not a path relative to this repository's root"
-    path = (root / name).resolve()
+    try:
+        path = (root / name).resolve()
+    except (OSError, ValueError):
+        return None, "is not a path"
     if not path.is_relative_to(root):
         return None, "is outside this repository"
     if not path.is_file():
