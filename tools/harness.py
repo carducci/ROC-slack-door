@@ -55,6 +55,7 @@ from __future__ import annotations
 import argparse
 import ast
 import hashlib
+import html
 import os
 import re
 import secrets
@@ -824,12 +825,11 @@ def stated_file(root: Path, name: str) -> tuple[Path | None, str]:
 # A fence opens with three or more of one character; a backtick fence's info string holds no
 # backtick (CommonMark 4.5), so a line opening with a ``` code span opens none.
 FENCE = re.compile(r" {0,3}(`{3,}(?=[^`]*$)|~{3,})")
-CODE_SPAN = re.compile(r"(?<!`)(`+)(?!`)(.+?)(?<!`)\1(?!`)", re.S)
 
 
 @dataclass(frozen=True)
 class Section:
-    """A `## ` section as a reader sees it (`flat`): its heading's words, and its body's."""
+    """A `## ` section as read_sections reads it (`flat`): its heading's words, and its body's."""
 
     heading: str
     body: str
@@ -840,8 +840,8 @@ class Section:
 
 
 def read_sections(path: Path) -> dict[str, Section] | str:
-    """The `## ` sections of a Markdown file, by heading, each read as a reader sees it; or
-    why the file can't be read.
+    """The `## ` sections of a Markdown file, by heading, each read as its words; or why the
+    file can't be read.
 
     A line inside a fenced block is the block's text, never a heading; the text outside one
     is read by `inline`, and every run of white space, a line ending in a code span included
@@ -884,19 +884,69 @@ def read_sections(path: Path) -> dict[str, Section] | str:
     return {h: Section(flat(words), flat(" ".join(body))) for h, (words, body) in sections.items()}
 
 
+PUNCTUATION = set("!\"#$%&'()*+,-./:;<=>?@[\\]^_`{|}~")
+# An inline link or image, `[text](destination "title")`: the title in "", '' or ().
+LINK = re.compile(
+    r"!?\[([^\]\n]*)\]\(\s*(?:<[^<>\n]*>|[^\s()<]*)"
+    r"""(?:\s+(?:"[^"]*"|'[^']*'|\([^()]*\)))?\s*\)"""
+)
+AUTOLINK = re.compile(r"<([A-Za-z][A-Za-z0-9+.-]{1,31}:[^<>\s]*|[^<>\s@]+@[^<>\s@]+)>")
+# Emphasis, a run of one to three `*` or `_` closed by the same run in the same paragraph:
+# `_` not inside a word.
+_IN_PARAGRAPH = r"((?:(?!\n[ \t]*\n).)+?)"
+EMPHASIS = (
+    re.compile(rf"(?<!\*)(\*{{1,3}})(?=[^\s*]){_IN_PARAGRAPH}(?<=[^\s*])\1(?!\*)", re.S),
+    re.compile(rf"(?<![\w_])(_{{1,3}})(?=[^\s_]){_IN_PARAGRAPH}(?<=[^\s_])\1(?![\w_])", re.S),
+)
+ENTITY = re.compile(r"&(?:#[0-9]{1,7}|#[xX][0-9A-Fa-f]{1,6}|[A-Za-z][A-Za-z0-9]{1,31});")
+
+
 def inline(text: str) -> str:
-    """Markdown text as its words: a code span is its content, a link its text, `**` nothing."""
+    """Markdown text as its words, which is what a reader sees of these forms and no others:
+    a code span is its content, its line endings spaces; a backslash escape is the character
+    it escapes, and a backslash ending a line a space; an inline link or image, with or
+    without a title, is its text; an autolink is its address; `*` and `_` emphasis, one to
+    three deep, are their words; an entity is its character. Code spans come first, and keep
+    escapes and entities as they are; an entity's character is never read as Markdown."""
+    held: list[str] = []
+
+    def hold(s: str) -> str:
+        held.append(s)
+        return chr(0xF0000 + len(held) - 1)  # a private-use character: no Markdown, no word
+
     out, pos = [], 0
-    for m in CODE_SPAN.finditer(text):
-        out += [_words(text[pos : m.start()]), m.group(2).replace("\n", " ")]
-        pos = m.end()
-    return "".join(out + [_words(text[pos:])])
-
-
-def _words(prose: str) -> str:
-    prose = re.sub(r"\[([^\]\n]*)\]\([^)\s]*\)", r"\1", prose)
-    prose = re.sub(r"<(https?://[^>\s]+)>", r"\1", prose)
-    return prose.replace("**", "")
+    while pos < len(text):
+        c = text[pos]
+        if c == "\\" and text[pos + 1 : pos + 2] in PUNCTUATION:
+            out.append(hold(text[pos + 1]))
+            pos += 2
+        elif c == "\\" and text[pos + 1 : pos + 2] == "\n":
+            out.append(" ")
+            pos += 2
+        elif c == "`":
+            ticks = re.match(r"`+", text[pos:]).group()
+            close = re.compile(rf"(?<!`){ticks}(?!`)").search(text, pos + len(ticks))
+            if close:
+                code = text[pos + len(ticks) : close.start()].replace("\n", " ")
+                if code.startswith(" ") and code.endswith(" ") and code.strip():
+                    code = code[1:-1]
+                out.append(hold(code))
+                pos = close.end()
+            else:
+                out.append(ticks)
+                pos += len(ticks)
+        else:
+            out.append(c)
+            pos += 1
+    words = LINK.sub(r"\1", "".join(out))
+    words = AUTOLINK.sub(r"\1", words)
+    for emphasis in EMPHASIS:
+        while True:
+            words, n = emphasis.subn(r"\2", words)
+            if not n:
+                break
+    words = ENTITY.sub(lambda m: hold(html.unescape(m.group())), words)
+    return re.sub("[\U000f0000-\U000ffffd]", lambda m: held[ord(m.group()) - 0xF0000], words)
 
 
 def flat(text: str) -> str:
@@ -916,7 +966,7 @@ def quoted(s: I, g: Graph) -> list[str]:
 
     A guide's comment paraphrases its rule in one sentence, and quotes in backticks at least
     one phrase of the rule's own text: a command, a flag, a file, or the words that state the
-    rule. The check holds each quote to the cited section as a reader sees it (read_sections),
+    rule. The check holds each quote to the cited section as read_sections reads it,
     so a change to either copy of a quoted phrase is a disagreement, and so is a guide that
     quotes nothing, or nothing but the section's heading."""
     return [m for c in g.values(s, RDFS + "comment") for m in re.findall(r"`([^`\n]+)`", c)]
