@@ -12,6 +12,7 @@ import sys
 import tempfile
 import unittest
 from pathlib import Path
+from unittest import mock
 
 ROOT = Path(__file__).resolve().parent.parent
 
@@ -21,6 +22,83 @@ sys.modules["harness"] = harness
 spec.loader.exec_module(harness)
 
 GUIDE = "urn:iki:harness:starter:guide:ask-dax-continue-draft"
+
+WINDOWS_RESERVED = {"CON", "PRN", "AUX", "NUL"} | {
+    f"{d}{n}" for d in ("COM", "LPT") for n in range(1, 10)
+}
+
+
+def windows_refuses(path: str | Path) -> str | None:
+    """The first part of `path` that Windows can't name a file or directory, or None."""
+    path = Path(path)
+    for part in path.parts[1:] if path.anchor else path.parts:
+        if part in (".", ".."):
+            continue
+        if (
+            any(c in '<>:"|?*' or ord(c) < 32 for c in part)
+            or part.endswith((".", " "))
+            or part.split(".")[0].rstrip(" ").upper() in WINDOWS_RESERVED
+        ):
+            return part
+    return None
+
+
+def make_only_windows_names(test: unittest.TestCase) -> None:
+    """For the rest of `test`, refuse to make a file or directory Windows can't name, as
+    Windows would, so a test that makes one fails here too (ikigai-slack#237)."""
+
+    def guard(make, made_at: int):
+        # made_at: which argument names what is made (Path's self, or shutil's destination).
+        def made(*args, **kwargs):
+            target = args[made_at]
+            part = windows_refuses(target)
+            if part is not None:
+                raise OSError(f"Windows can't name {part!r}, in {target}")
+            return make(*args, **kwargs)
+
+        return made
+
+    for owner, name, made_at in (
+        (Path, "mkdir", 0),
+        (Path, "write_text", 0),
+        (Path, "write_bytes", 0),
+        (Path, "symlink_to", 0),
+        (shutil, "copy", 1),
+        (shutil, "copytree", 1),
+    ):
+        patcher = mock.patch.object(owner, name, guard(getattr(owner, name), made_at))
+        patcher.start()
+        test.addCleanup(patcher.stop)
+
+
+class WindowsNamesTest(unittest.TestCase):
+    """The guard the tests below make files under: a name Windows refuses is refused here."""
+
+    def test_a_name_windows_refuses_is_refused(self) -> None:
+        for part in (
+            *("x:", "a<b", "a>b", 'a"b', "a|b", "a?b", "a*b", "a\x01b", "x.", "x "),
+            *("CON", "nul.txt", "com1", "LPT9.md"),
+        ):
+            with self.subTest(part=part):
+                self.assertEqual(part, windows_refuses(Path("/tmp") / part / "ci.yml"))
+
+    def test_a_name_windows_takes_is_taken(self) -> None:
+        for path in (
+            *("/tmp/x/ci.yml", "../x/RULES.md", "./AGENTS.md", ".github/workflows/ci.yml"),
+            *("CONSOLE.md", "COM10"),
+        ):
+            with self.subTest(path=path):
+                self.assertIsNone(windows_refuses(path))
+
+    def test_the_guard_refuses_before_it_makes(self) -> None:
+        tmp = tempfile.TemporaryDirectory()
+        self.addCleanup(tmp.cleanup)
+        make_only_windows_names(self)
+        with self.assertRaises(OSError):
+            (Path(tmp.name) / "x:").mkdir()
+        self.assertFalse((Path(tmp.name) / "x:").exists())
+        (Path(tmp.name) / "x").mkdir()
+        self.assertTrue((Path(tmp.name) / "x").is_dir())
 
 
 class HarnessCheckTest(unittest.TestCase):
@@ -37,6 +115,7 @@ class GuideTextDriftTest(unittest.TestCase):
         self.repo = Path(self.tmp.name) / "repo"
         shutil.copytree(ROOT, self.repo, ignore=shutil.ignore_patterns(".git", "target"))
         self.assertEqual([], harness.check(self.repo), "the copy agrees before it is changed")
+        make_only_windows_names(self)
 
     def tearDown(self) -> None:
         self.tmp.cleanup()
@@ -111,6 +190,7 @@ class GuideTextTest(unittest.TestCase):
         self.repo = self.outside / "repo"
         shutil.copytree(ROOT, self.repo, ignore=shutil.ignore_patterns(".git", "target"))
         self.assertEqual([], harness.check(self.repo), "the copy agrees before it is changed")
+        make_only_windows_names(self)
 
     def tearDown(self) -> None:
         self.tmp.cleanup()
@@ -608,6 +688,7 @@ class ControlCodeTest(unittest.TestCase):
         self.repo = self.outside / "repo"
         shutil.copytree(ROOT, self.repo, ignore=shutil.ignore_patterns(".git", "target"))
         self.assertEqual([], harness.check(self.repo), "the copy agrees before it is changed")
+        make_only_windows_names(self)
         (self.outside / "x").mkdir()
         shutil.copy(self.repo / ".github/workflows/ci.yml", self.outside / "x" / "ci.yml")
 
