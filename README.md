@@ -18,9 +18,9 @@ written against them can move to another chat system by swapping the door undern
 
 | Name | Verbs | What it is |
 |---|---|---|
-| `urn:slack:thread:{key}` | source, sink, exists | A conversation, named by a key the caller chooses. The first write opens it as a new message in the channel; later writes reply in the thread. Reading returns the conversation as JSON, with no Slack ids in it. |
-| `urn:slack:thread:{key}:reaction:{name}` | sink, delete | A reaction on the thread's opening message (`white_check_mark`, for example). |
-| an inbox space ([ikigai-intray](https://crates.io/crates/ikigai-intray)) | the space's own | Where replies and reactions from allowed people land, tagged with the thread's key. A speaker's message that starts a new conversation is recorded as a thread and lands under a key the door mints (`m-` and its time, e.g. `m-1700000000-000001`), so a reply goes under it. |
+| `urn:slack:channel:{name}:thread:{key}` | source, sink, exists | A conversation, named by a key the caller chooses. The first write opens it as a new message in the channel; later writes reply in the thread. Reading returns the conversation as JSON, with no Slack ids in it. |
+| `urn:slack:channel:{name}:thread:{key}:reaction:{reaction}` | sink, delete | A reaction on the thread's opening message (`white_check_mark`, for example). |
+| `urn:slack:channel:{name}:inbox` ([ikigai-intray](https://crates.io/crates/ikigai-intray)) | the space's own | Where replies and reactions from a channel's speakers land, tagged with the thread's key. A speaker's message that starts a new conversation is recorded as a thread and lands under a key the door mints (`m-` and its time, e.g. `m-1700000000-000001`), so a reply goes under it. |
 
 Three capabilities gate the verbs: `urn:cap:slack:read`, `urn:cap:slack:post`, and
 `urn:cap:slack:react`. A host can let one caller read and another post.

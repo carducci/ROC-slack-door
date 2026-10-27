@@ -1,4 +1,4 @@
-//! The served space: `urn:slack:thread:{key}` and its reactions as endpoints in a kernel, plus
+//! The served space: `urn:slack:channel:{name}:thread:{key}` and its reactions as endpoints in a kernel, plus
 //! the inbox space the door drops deliveries into, all behind one `Kernel` that another kernel
 //! mounts over a Unix socket. The door writes the inbox through the kernel, as any caller would,
 //! under the host's own root capability.
@@ -82,7 +82,7 @@ fn ok_text(message: &str) -> Representation {
     )
 }
 
-/// `urn:slack:thread:{key}`: sourcing reads the conversation, sinking posts to it.
+/// `urn:slack:channel:{name}:thread:{key}`: sourcing reads the conversation, sinking posts to it.
 pub struct ThreadEndpoint<T: SlackTransport> {
     threads: Shared<T>,
 }
@@ -184,7 +184,7 @@ impl<T: SlackTransport + Send + 'static> Endpoint for ChannelThreadEndpoint<T> {
     }
 }
 
-/// `urn:slack:thread:{key}:reaction:{name}`: sinking adds the reaction, deleting removes it.
+/// `urn:slack:channel:{name}:thread:{key}:reaction:{reaction}`: sinking adds the reaction, deleting removes it.
 pub struct ReactionEndpoint<T: SlackTransport> {
     threads: Shared<T>,
 }
