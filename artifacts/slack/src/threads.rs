@@ -402,6 +402,27 @@ mod tests {
         Grants::all()
     }
 
+    /// A transport that panics when called, for a test that nothing may reach Slack.
+    struct NeverCalled;
+
+    impl SlackTransport for NeverCalled {
+        fn post(&mut self, channel: &str, _: Option<&str>, _: &str) -> Result<String, TransportError> {
+            panic!("posted to {channel:?}")
+        }
+
+        fn react(&mut self, channel: &str, _: &str, _: &str, _: bool) -> Result<(), TransportError> {
+            panic!("reacted in {channel:?}")
+        }
+
+        fn replies(&mut self, channel: &str, _: &str) -> Result<Vec<crate::Message>, TransportError> {
+            panic!("read replies in {channel:?}")
+        }
+
+        fn take_events(&mut self) -> Vec<Event> {
+            panic!("took events")
+        }
+    }
+
     #[test]
     fn key_for_tells_equal_timestamps_in_two_channels_apart() {
         let dir = scratch("key-for");
@@ -778,11 +799,12 @@ mod tests {
         for (n, bad) in ["C1\tx", "C1\nx", "C1\rx", "C1\u{7f}"].iter().enumerate() {
             let dir = scratch(&format!("bad-channel-post-{n}"));
             // Opened, two writes would post twice before record refused the id; refused at
-            // open, there is no Threads to write through, and nothing reaches Slack.
-            let err = Threads::open(&dir, bad, FakeSlack::new()).err().expect("opened");
+            // open, there is no Threads to write through, and nothing reaches Slack. NeverCalled
+            // panics on any call, so a refusal that posts first fails here too.
+            let err = Threads::open(&dir, bad, NeverCalled).err().expect("opened");
             assert_eq!(err.kind(), io::ErrorKind::InvalidInput, "{bad:?}");
             let channels = [("a".to_owned(), "C1".to_owned()), ("b".to_owned(), (*bad).to_owned())];
-            let err = Threads::open_channels(&dir, &channels, FakeSlack::new()).err().expect("opened");
+            let err = Threads::open_channels(&dir, &channels, NeverCalled).err().expect("opened");
             assert_eq!(err.kind(), io::ErrorKind::InvalidInput, "{bad:?}");
             assert!(!dir.join(MAP_FILE).exists(), "{bad:?}");
         }
