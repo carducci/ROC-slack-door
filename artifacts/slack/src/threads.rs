@@ -7,8 +7,8 @@ use std::io::{self, Write};
 use std::path::{Path, PathBuf};
 
 use crate::{
-    check_key, check_reaction, check_text, Entry, Grants, Refusal, SlackTransport, TransportError,
-    POST, READ, REACT,
+    check_key, check_reaction, check_text, is_slack_ts, Entry, Grants, Refusal, SlackTransport,
+    TransportError, POST, READ, REACT,
 };
 
 /// The map's file in the state directory: one thread per line, `key TAB channel TAB ts`.
@@ -31,7 +31,7 @@ pub enum ThreadError {
     /// Slack is throttling the door or cannot be reached; retry, after `retry_after_secs` when
     /// Slack gave one.
     Unavailable { retry_after_secs: Option<u64> },
-    /// The map could not be read or saved.
+    /// The map could not be read or saved, or Slack answered a timestamp the map cannot hold.
     State(io::Error),
 }
 
@@ -157,6 +157,14 @@ impl<T: SlackTransport> Threads<T> {
             .post(channel, parent.as_deref(), text)
             .map_err(from_transport)?;
         if parent.is_none() {
+            // The map holds only timestamps of Slack's shape: anything else is refused before it
+            // can reach a line of threads.tsv, and the key stays free for a retry.
+            if !is_slack_ts(&ts) {
+                return Err(ThreadError::State(io::Error::new(
+                    io::ErrorKind::InvalidData,
+                    format!("Slack answered a timestamp of another shape: {ts:?}"),
+                )));
+            }
             let thread = Thread {
                 channel: channel.to_owned(),
                 ts,
@@ -627,6 +635,38 @@ mod tests {
         drop(Threads::open_channels(&dir, &declared(), FakeSlack::new()).unwrap());
         drop(Threads::open_channels(&dir, &declared(), FakeSlack::new()).unwrap());
         assert_eq!(fs::read_to_string(dir.join(MAP_FILE)).unwrap(), text);
+    }
+
+    #[test]
+    fn an_answered_timestamp_of_another_shape_is_refused_and_no_thread_is_kept() {
+        let dir = scratch("bad-answer");
+        let mut threads = Threads::open(&dir, "C1", FakeSlack::new()).unwrap();
+        threads.write(&all(), "other", "Opening").unwrap();
+        let saved = fs::read_to_string(dir.join(MAP_FILE)).unwrap();
+        let bad_timestamps = [
+            "1700000100.000001\tC1\tx",
+            "1700000100.0\nevil",
+            "17000:00100.000001",
+            "abc",
+            "1.2.3",
+            ".5",
+            "5.",
+            "",
+        ];
+        for bad in bad_timestamps {
+            threads.transport_mut().answer_next_post(bad);
+            let err = threads.write(&all(), "carducci-54", "Opening").unwrap_err();
+            assert!(
+                matches!(err, ThreadError::State(ref why) if why.kind() == io::ErrorKind::InvalidData),
+                "{bad:?}: {err:?}"
+            );
+            assert!(!threads.exists(&all(), "carducci-54").unwrap(), "{bad:?}");
+            assert_eq!(fs::read_to_string(dir.join(MAP_FILE)).unwrap(), saved, "{bad:?}");
+        }
+        drop(threads);
+        let after = Threads::open(&dir, "C1", FakeSlack::new()).unwrap();
+        assert!(after.exists(&all(), "other").unwrap());
+        assert!(!after.exists(&all(), "carducci-54").unwrap());
     }
 
     #[test]
