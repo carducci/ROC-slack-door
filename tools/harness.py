@@ -751,58 +751,151 @@ def check(repo: Path) -> list[str]:
             if code and (where, control_id(s)) not in emitted:
                 bad.append(f"{s.value}: enforcedAt {where}, which fires no `{control_id(s)}`")
 
-    # The file each guide is stated in: it cites a heading the file has, and every word the
-    # guide quotes is quoted in that section. AGENTS.md: every rule heading has a guide.
+    # The file each guide is stated in, inside this repository: it cites a heading the file
+    # has, and quotes that section, word for word. AGENTS.md: every rule heading has a guide.
+    root = repo.resolve()
+    agents_md = root / "AGENTS.md"
+    read: dict[Path, dict[str, str] | str] = {}
     cited = set()
     for s in sorted(guides, key=lambda t: t.value):
         for name in g.values(s, H + "statedIn"):
-            sections = read_sections(repo / name)
-            if sections is None:
-                bad.append(f"{s.value}: statedIn {name!r}, which is not in this repository")
+            path, why = stated_file(root, name)
+            if path is not None and path not in read:
+                read[path] = read_sections(path)
+            sections = read[path] if path is not None else why
+            if isinstance(sections, str):
+                bad.append(f"{s.value}: statedIn {name!r}, which {sections}")
                 continue
+            is_agents_md = agents_md.is_file() and path.samefile(agents_md)
             for section in g.values(s, H + "section"):
-                if name == "AGENTS.md":
+                if is_agents_md:
                     cited.add(section)
                 if section not in sections:
                     bad.append(f"{s.value}: section {section!r} is not a heading of {name}")
                     continue
-                for quote in quoted(s, g):
-                    if quote not in sections[section]:
-                        bad.append(
-                            f"{s.value}: quotes {quote}, which {name} `## {section}` does not"
-                        )
-    agents = read_sections(repo / "AGENTS.md")
-    if agents is not None:
-        for heading in sorted(set(agents) - cited - NON_RULE_HEADINGS):
-            bad.append(f"AGENTS.md: `## {heading}` states rules no guide in {GRAPH_FILE} names")
+                where = f"{name} {code_span('## ' + section)}"
+                quotes = quoted(s, g)
+                if not quotes:
+                    bad.append(
+                        f"{s.value}: quotes nothing of {where}; "
+                        "quote, in backticks, a phrase the section says"
+                    )
+                for quote in quotes:
+                    if flat(quote) not in sections[section]:
+                        bad.append(f"{s.value}: quotes {code_span(quote)}, which {where} does not")
+    if agents_md.is_file():
+        agents_path = agents_md.resolve()
+        if agents_path not in read:
+            read[agents_path] = read_sections(agents_path)
+        agents = read[agents_path]
+        if isinstance(agents, str):
+            bad.append(f"AGENTS.md {agents}")
+        else:
+            for heading in sorted(set(agents) - cited - NON_RULE_HEADINGS):
+                bad.append(
+                    f"AGENTS.md: {code_span('## ' + heading)} states rules no guide in "
+                    f"{GRAPH_FILE} names"
+                )
     return bad
 
 
-def read_sections(path: Path) -> dict[str, str] | None:
-    """The `## ` sections of a Markdown file, heading to body; None when there is no file."""
+def stated_file(root: Path, name: str) -> tuple[Path | None, str]:
+    """The file a guide's statedIn names, resolved against the repository's root (as
+    vocabulary.ttl defines it), or None and why: absolute, through `..` or by a symlink, a
+    path that leaves the repository names no file of it."""
+    path = (root / name).resolve()
+    if Path(name).is_absolute() or not path.is_relative_to(root):
+        return None, "is outside this repository"
     if not path.is_file():
-        return None
+        return None, "is not in this repository"
+    return path, ""
+
+
+FENCE = re.compile(r" {0,3}(`{3,}|~{3,})")
+CODE_SPAN = re.compile(r"(?<!`)(`+)(?!`)(.+?)(?<!`)\1(?!`)", re.S)
+
+
+def read_sections(path: Path) -> dict[str, str] | str:
+    """The `## ` sections of a Markdown file, heading to the section as a reader sees it
+    (`flat`), its heading's words included; or why the file can't be read.
+
+    A line inside a fenced block is the block's text, never a heading; code spans, links and
+    `**` are read as their words, and every run of white space, a line ending in a code span
+    included (CommonMark 6.1), as one space."""
+    try:
+        text = path.read_text(encoding="utf-8")
+    except UnicodeDecodeError:
+        return "is not UTF-8 text"
+    except OSError as e:
+        return f"can't be read ({e.strerror})"
     sections: dict[str, list[str]] = {}
-    body = None
-    for line in path.read_text(encoding="utf-8").splitlines():
-        if line.startswith("## "):
-            body = sections.setdefault(line[3:].strip(), [])
-        elif body is not None:
-            body.append(line)
-    return {heading: "\n".join(lines) for heading, lines in sections.items()}
+    lines: list[str] | None = None
+    prose: list[str] = []
+    fence = ""
+
+    def close_prose() -> None:
+        if lines is not None and prose:
+            lines.append(inline("\n".join(prose)))
+        prose.clear()
+
+    for line in text.splitlines():
+        m = FENCE.match(line)
+        if fence:
+            if m and m.group(1)[0] == fence[0] and len(m.group(1)) >= len(fence):
+                if not line[m.end() :].strip():
+                    fence = ""
+                    continue
+            if lines is not None:
+                lines.append(line)
+        elif m:
+            close_prose()
+            fence = m.group(1)
+        elif line.startswith("## "):
+            close_prose()
+            lines = sections.setdefault(line[3:].strip(), [])
+            prose.append(line[3:])
+        else:
+            prose.append(line)
+    close_prose()
+    return {heading: flat(" ".join(parts)) for heading, parts in sections.items()}
+
+
+def inline(text: str) -> str:
+    """Markdown text as its words: a code span is its content, a link its text, `**` nothing."""
+    out, pos = [], 0
+    for m in CODE_SPAN.finditer(text):
+        out += [_words(text[pos : m.start()]), m.group(2).replace("\n", " ")]
+        pos = m.end()
+    return "".join(out + [_words(text[pos:])])
+
+
+def _words(prose: str) -> str:
+    prose = re.sub(r"\[([^\]\n]*)\]\([^)\s]*\)", r"\1", prose)
+    prose = re.sub(r"<(https?://[^>\s]+)>", r"\1", prose)
+    return prose.replace("**", "")
+
+
+def flat(text: str) -> str:
+    return " ".join(text.split())
+
+
+def code_span(text: str) -> str:
+    """`text` as a Markdown code span, readable when the text has backticks of its own."""
+    ticks = "`" * (1 + max((len(run) for run in re.findall(r"`+", text)), default=0))
+    pad = " " if text.startswith("`") or text.endswith("`") else ""
+    return f"{ticks}{pad}{text}{pad}{ticks}"
 
 
 def quoted(s: I, g: Graph) -> list[str]:
-    """The words a guide quotes, each with its backticks: what its rdfs:comment must share
+    """The phrases a guide quotes in backticks: what its rdfs:comment shares, word for word,
     with the section it cites.
 
-    A guide's comment PARAPHRASES its rule in one sentence, so the two are not compared word
-    for word: a comment equal to its section would be the section again. What a guide puts in
-    backticks (a command, a flag, a file, a phrase to write) it claims is the rule's own text,
-    and that is checked: each quote is in the cited section, backticks and all, so a change to
-    either copy of a quoted word is a disagreement. A drift in the unquoted paraphrase is left
-    to the reviewer."""
-    return [m for c in g.values(s, RDFS + "comment") for m in re.findall(r"`[^`\n]+`", c)]
+    A guide's comment paraphrases its rule in one sentence, and quotes in backticks at least
+    one phrase of the rule's own text: a command, a flag, a file, or the words that state the
+    rule. The check holds each quote to the cited section as a reader sees it (read_sections),
+    so a change to either copy of a quoted phrase is a disagreement, and so is a guide that
+    quotes nothing."""
+    return [m for c in g.values(s, RDFS + "comment") for m in re.findall(r"`([^`\n]+)`", c)]
 
 
 # --------------------------------------------------------------------------- the commands
