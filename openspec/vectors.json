@@ -151,7 +151,7 @@
       ]
     },
     {
-      "id": "urn:openspec:spec:inbox:requirement:a-message-outside-any-thread-lands-without-a-key:scenario:a-person-starts-a-conversation",
+      "id": "urn:openspec:spec:inbox:requirement:a-speaker-s-top-level-message-opens-a-thread:scenario:david-starts-a-conversation",
       "steps": [
         {
           "feed": {
@@ -168,6 +168,21 @@
               "key": "m-1700000101-000001",
               "user": "U1",
               "text": "What's blocked today?"
+            }
+          ]
+        },
+        {
+          "write": {
+            "key": "m-1700000101-000001",
+            "text": "Blocked on a token"
+          },
+          "expect": "ok"
+        },
+        {
+          "posts": [
+            {
+              "text": "Blocked on a token",
+              "thread": "1700000101.000001"
             }
           ]
         }
