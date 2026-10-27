@@ -8,7 +8,8 @@
 # `python3 tools/harness.py check` holds this file to the code and to AGENTS.md;
 # `python3 tools/gonk.py harness` loads it into gonk and asks .gonk/queries/harness-*.rq.
 # A guide's rdfs:comment paraphrases the rule it cites and quotes, in backticks, at least one
-# phrase of it: the check holds every `quoted` phrase to the cited section as a reader sees it
+# phrase of the rule under its heading: the check holds every `quoted` phrase to the cited
+# section with its Markdown read as the forms tools/harness.py#inline names
 # (tools/harness.py#quoted, #read_sections).
 # FORMAT: the Turtle subset tools/harness.py reads. No blank nodes.
 
