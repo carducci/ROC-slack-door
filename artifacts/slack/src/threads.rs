@@ -368,9 +368,10 @@ fn parse(text: &str) -> io::Result<BTreeMap<(String, String), Thread>> {
         .map(|line| {
             let fields: Vec<&str> = line.split('\t').collect();
             match fields.as_slice() {
-                // The line is held to the shapes record holds new ones to.
-                [key, channel, ts]
-                    if check_key(key).is_ok() && !has_control(channel) && is_slack_ts(ts) => Ok((
+                // The line's key and timestamp are held to the shapes record holds new ones to.
+                // Its channel id is kept as it is: one that holds a control character reads back
+                // the same, and is for an undeclared channel, whose lines design D6 keeps.
+                [key, channel, ts] if check_key(key).is_ok() && is_slack_ts(ts) => Ok((
                     slot(channel, key),
                     Thread {
                         channel: (*channel).to_owned(),
