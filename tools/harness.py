@@ -54,6 +54,7 @@ from __future__ import annotations
 
 import argparse
 import ast
+import errno
 import hashlib
 import html
 import html.entities
@@ -61,6 +62,7 @@ import itertools
 import os
 import re
 import secrets
+import stat
 import sys
 import time
 import unicodedata
@@ -839,23 +841,38 @@ def repo_file(root: Path, name: str) -> tuple[Path | None, str]:
     on every platform, wherever it points: a name that starts with / or \\ (POSIX absolute, UNC),
     or holds a colon (a drive letter, a URL, a colon in a directory's name). One that leaves the
     repository through `..` or by a symlink names no file of it, and a NUL is no path at all.
-    One that is in the repository but is no file (a directory, a FIFO) is refused as what it
-    is, and an empty name, which would resolve to the root, as empty (ikigai-slack#234)."""
+    One that is in the repository but is no file is refused as what it is: a directory; a FIFO
+    or a socket ("is not a file"); a symlink to nothing, or a symlink loop; a path the system
+    won't let this process reach ("can't be read (<its reason>)", as read_sections words it);
+    and an empty name, which would resolve to the root, as empty (ikigai-slack#234,
+    ikigai-slack#257). Presence is decided by one os.stat of the name as written, read for
+    what went wrong; never by exists(), which takes every error for absence (and on Python
+    3.12 raises some), and resolve() is not used, as 3.12's raises RuntimeError on a loop."""
     if not name:
         return None, "is empty"
     if name.startswith(("/", "\\")) or ":" in name or Path(name).is_absolute():
         return None, "is not a path relative to this repository's root"
-    try:
-        path = (root / name).resolve()
-    except (OSError, ValueError):
+    if "\x00" in name:
         return None, "is not a path"
+    link = root / name
+    # Not strict: a loop or a dangling link is kept as written, and named by the stat below.
+    path = Path(os.path.realpath(link))
     if not path.is_relative_to(root):
         return None, "is outside this repository"
-    if not path.exists():
-        return None, "is not in this repository"
-    if path.is_dir():
+    try:
+        mode = os.stat(link).st_mode
+    except OSError as e:
+        # Windows says a loop with ERROR_CANT_RESOLVE_FILENAME (1921), not ELOOP.
+        if e.errno == errno.ELOOP or getattr(e, "winerror", None) == 1921:
+            return None, "is a symlink loop"
+        if e.errno in (errno.ENOENT, errno.ENOTDIR):
+            if os.path.lexists(link):
+                return None, "is a symlink to nothing"
+            return None, "is not in this repository"
+        return None, f"can't be read ({e.strerror})"
+    if stat.S_ISDIR(mode):
         return None, "is a directory, not a file"
-    if not path.is_file():
+    if not stat.S_ISREG(mode):
         return None, "is not a file"
     return path, ""
 
