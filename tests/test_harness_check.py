@@ -847,6 +847,38 @@ class GuideTextTest(unittest.TestCase):
             self.problems("ask-dax-continue-draft"),
         )
 
+    def test_a_stated_in_directory_is_a_directory_not_a_file(self) -> None:
+        # ikigai-slack#234: `tools` is in the repository; what is wrong is that it is no file.
+        for name in ("tools", "tools/", "./tools"):
+            with self.subTest(name=name):
+                self.restore()
+                self.guide("ask-dax-continue-draft", stated_in=name)
+                self.assertEqual(
+                    [
+                        f"{GUIDES}ask-dax-continue-draft: statedIn {name!r}, "
+                        "which is a directory, not a file"
+                    ],
+                    self.problems("ask-dax-continue-draft"),
+                )
+
+    def test_an_empty_stated_in_is_empty(self) -> None:
+        # ikigai-slack#234: an empty name resolves to the root, which is in the repository.
+        self.guide("ask-dax-continue-draft", stated_in="")
+        self.assertEqual(
+            [f"{GUIDES}ask-dax-continue-draft: statedIn '', which is empty"],
+            self.problems("ask-dax-continue-draft"),
+        )
+
+    @unittest.skipUnless(hasattr(os, "mkfifo"), "a FIFO is made by os.mkfifo, POSIX only")
+    def test_a_stated_in_that_is_neither_file_nor_directory_is_not_a_file(self) -> None:
+        # ikigai-slack#234: a FIFO is in the repository too, and is not a file.
+        os.mkfifo(self.repo / "PIPE.md")
+        self.guide("ask-dax-continue-draft", stated_in="PIPE.md")
+        self.assertEqual(
+            [f"{GUIDES}ask-dax-continue-draft: statedIn 'PIPE.md', which is not a file"],
+            self.problems("ask-dax-continue-draft"),
+        )
+
     def test_another_spelling_of_agents_md_is_agents_md(self) -> None:
         # P8 of ikigai-slack#187: the guide still cites `## 7. …` of AGENTS.md.
         self.guide("read-accessibility-first", stated_in="./AGENTS.md")
@@ -953,6 +985,40 @@ class ControlCodeTest(unittest.TestCase):
         where = ".github/workflows/nowhere.yml"
         self.assertEqual(
             [f"{CONTROLS}ci-checks: enforcedAt {where}, and {where} is not in this repository"],
+            self.enforced_at(where),
+        )
+
+    def test_an_enforced_at_directory_is_a_directory_not_a_file(self) -> None:
+        # ikigai-slack#234: `tools` is in the repository; what is wrong is that it is no file.
+        for where, path in (("tools", "tools"), ("tools/", "tools/"), ("tools#main", "tools")):
+            with self.subTest(where=where):
+                shutil.copy(ROOT / ".gonk/harness/harness.ttl", self.repo / ".gonk/harness/harness.ttl")
+                self.assertEqual(
+                    [
+                        f"{CONTROLS}ci-checks: enforcedAt {where}, and {path} "
+                        "is a directory, not a file"
+                    ],
+                    self.enforced_at(where),
+                )
+
+    def test_an_empty_enforced_at_is_empty(self) -> None:
+        # ikigai-slack#234: an empty path resolves to the root, which is in the repository. It
+        # is shown quoted, as nothing else makes it visible, and `#main` alone has one too.
+        for where in ("", "#main"):
+            with self.subTest(where=where):
+                shutil.copy(ROOT / ".gonk/harness/harness.ttl", self.repo / ".gonk/harness/harness.ttl")
+                self.assertEqual(
+                    [f"{CONTROLS}ci-checks: enforcedAt {where!r}, and its path is empty"],
+                    self.enforced_at(where),
+                )
+
+    @unittest.skipUnless(hasattr(os, "mkfifo"), "a FIFO is made by os.mkfifo, POSIX only")
+    def test_an_enforced_at_that_is_neither_file_nor_directory_is_not_a_file(self) -> None:
+        # ikigai-slack#234: a FIFO is in the repository too, and is not a file.
+        os.mkfifo(self.repo / "tools" / "pipe")
+        where = "tools/pipe"
+        self.assertEqual(
+            [f"{CONTROLS}ci-checks: enforcedAt {where}, and {where} is not a file"],
             self.enforced_at(where),
         )
 
