@@ -176,8 +176,10 @@ impl<T: SlackTransport> Threads<T> {
 
     /// Records `thread` under `key` in its channel and saves the map. The entry is kept only once
     /// the map is saved: a save that fails leaves the map, in memory and on disk, as it was,
-    /// a thread the slot already held included.
+    /// a thread the slot already held included. A thread that cannot be one line of threads.tsv
+    /// is refused before anything changes, on every route: `write`'s and `adopt`'s alike.
     fn record(&mut self, key: &str, thread: Thread) -> io::Result<()> {
+        check_line(key, &thread)?;
         let slot = slot(&thread.channel, key);
         let held = self.threads.insert(slot.clone(), thread);
         if let Err(error) = self.save() {
@@ -324,12 +326,38 @@ fn slot(channel: &str, key: &str) -> (String, String) {
     (channel.to_owned(), key.to_owned())
 }
 
+/// Refuses a thread that cannot be one line of threads.tsv and read back the same: its key must
+/// be one `check_key` takes, its timestamp of Slack's shape, and its channel id must hold no tab
+/// or newline.
+fn check_line(key: &str, thread: &Thread) -> io::Result<()> {
+    if check_key(key).is_err() {
+        return Err(io::Error::new(
+            io::ErrorKind::InvalidData,
+            format!("a key that is not a thread key: {key:?}"),
+        ));
+    }
+    if !is_slack_ts(&thread.ts) {
+        return Err(io::Error::new(
+            io::ErrorKind::InvalidData,
+            format!("a timestamp of another shape: {:?}", thread.ts),
+        ));
+    }
+    if thread.channel.contains(['\t', '\n']) {
+        return Err(io::Error::new(
+            io::ErrorKind::InvalidData,
+            format!("a channel id with a tab or newline: {:?}", thread.channel),
+        ));
+    }
+    Ok(())
+}
+
 fn parse(text: &str) -> io::Result<BTreeMap<(String, String), Thread>> {
     text.lines()
         .map(|line| {
             let fields: Vec<&str> = line.split('\t').collect();
             match fields.as_slice() {
-                [key, channel, ts] => Ok((
+                // The line's key and timestamp are held to the shapes record holds new ones to.
+                [key, channel, ts] if check_key(key).is_ok() && is_slack_ts(ts) => Ok((
                     slot(channel, key),
                     Thread {
                         channel: (*channel).to_owned(),
@@ -713,6 +741,76 @@ mod tests {
         threads.record("carducci-54", other).unwrap_err();
         assert_eq!(threads.threads.get(&slot("C1", "carducci-54")), Some(&held));
         assert_eq!(fs::read_to_string(dir.join(MAP_FILE)).unwrap(), saved);
+    }
+
+    #[test]
+    fn an_adopted_timestamp_of_another_shape_is_refused_and_the_map_still_reopens() {
+        let dir = scratch("bad-adopt");
+        let mut threads = Threads::open(&dir, "C1", FakeSlack::new()).unwrap();
+        threads.write(&all(), "other", "Opening").unwrap();
+        let saved = fs::read_to_string(dir.join(MAP_FILE)).unwrap();
+        for bad in ["1700000100.000001\tC1\tx", "1700000100.0\nevil", "abc", ""] {
+            let err = threads.adopt("C1", "k", bad).unwrap_err();
+            assert_eq!(err.kind(), io::ErrorKind::InvalidData, "{bad:?}");
+            assert!(!threads.exists(&all(), "k").unwrap(), "{bad:?}");
+            assert_eq!(fs::read_to_string(dir.join(MAP_FILE)).unwrap(), saved, "{bad:?}");
+        }
+        drop(threads);
+        let after = Threads::open(&dir, "C1", FakeSlack::new()).unwrap();
+        assert!(after.exists(&all(), "other").unwrap());
+    }
+
+    #[test]
+    fn a_channel_id_with_a_tab_or_newline_is_refused_before_the_map() {
+        for (n, bad) in ["C1\tx", "C1\nx"].iter().enumerate() {
+            let dir = scratch(&format!("bad-channel-{n}"));
+            let mut threads = Threads::open(&dir, bad, FakeSlack::new()).unwrap();
+            let err = threads.write(&all(), "carducci-54", "Opening").unwrap_err();
+            assert!(
+                matches!(err, ThreadError::State(ref why) if why.kind() == io::ErrorKind::InvalidData),
+                "{bad:?}: {err:?}"
+            );
+            let err = threads.adopt(bad, "k", "1700000100.000001").unwrap_err();
+            assert_eq!(err.kind(), io::ErrorKind::InvalidData, "{bad:?}");
+            assert!(!dir.join(MAP_FILE).exists(), "{bad:?}");
+        }
+    }
+
+    #[test]
+    fn an_adopted_key_that_is_not_a_key_is_refused_and_the_map_still_reopens() {
+        let dir = scratch("bad-adopt-key");
+        let mut threads = Threads::open(&dir, "C1", FakeSlack::new()).unwrap();
+        threads.write(&all(), "other", "Opening").unwrap();
+        let saved = fs::read_to_string(dir.join(MAP_FILE)).unwrap();
+        let long = "k".repeat(crate::MAX_KEY_LEN + 1);
+        for bad in ["k\tC1", "k\nx", "k\r\nx", "", "a key", long.as_str()] {
+            let err = threads.adopt("C1", bad, "1700000100.000001").unwrap_err();
+            assert_eq!(err.kind(), io::ErrorKind::InvalidData, "{bad:?}");
+            assert_eq!(threads.key_for("C1", "1700000100.000001"), None, "{bad:?}");
+            assert_eq!(fs::read_to_string(dir.join(MAP_FILE)).unwrap(), saved, "{bad:?}");
+        }
+        drop(threads);
+        let after = Threads::open(&dir, "C1", FakeSlack::new()).unwrap();
+        assert!(after.exists(&all(), "other").unwrap());
+    }
+
+    #[test]
+    fn a_map_line_whose_key_is_not_a_key_is_refused_on_open() {
+        let long = "k".repeat(crate::MAX_KEY_LEN + 1);
+        for (n, bad) in ["", "a key", "café", long.as_str()].iter().enumerate() {
+            let dir = legacy_dir(&format!("bad-key-line-{n}"), &format!("{bad}\tC1\t1700000100.000001\n"));
+            let err = Threads::open(&dir, "C1", FakeSlack::new()).err().unwrap();
+            assert_eq!(err.kind(), io::ErrorKind::InvalidData, "{bad:?}");
+        }
+    }
+
+    #[test]
+    fn a_map_line_whose_timestamp_is_of_another_shape_is_refused_on_open() {
+        for (n, bad) in ["abc", "1.2.3", "", "1700000100.000001 "].iter().enumerate() {
+            let dir = legacy_dir(&format!("bad-line-{n}"), &format!("k\tC1\t{bad}\n"));
+            let err = Threads::open(&dir, "C1", FakeSlack::new()).err().unwrap();
+            assert_eq!(err.kind(), io::ErrorKind::InvalidData, "{bad:?}");
+        }
     }
 
     #[test]
