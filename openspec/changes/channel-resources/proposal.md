@@ -91,25 +91,30 @@ Slack is called.
 tuples are Turtle, the intray space's own face. The channel's and the thread's Sinks take
 `text/plain`, as `content` or as `in` when piped. The reaction's Sink takes no body: text
 sent with it is ignored. The inbox's Sink takes a Turtle tuple, forwarded to the space as
-the bytes it came as: nothing in the door or the space checks that they are Turtle. Templates
+the bytes it came as once the door has read them as UTF-8 text (see Errors): nothing in the
+door or the space checks that they are Turtle, or that there are any. Templates
 and views: see Not needed.
 
-**Errors.** For the Slack names: `bad-key` (an empty key included), `bad-reaction` and an
-empty or over-long text are InvalidArgument; a Sink with no text, to the channel, a thread
-or the inbox, is MissingArgument(`content`), the inbox's because its handler reads the text
-itself before forwarding; `no-thread` and `no-channel` are NotFound, and so is the
+**Errors.** For the channel, a thread and a reaction: `bad-key` (an empty key included),
+`bad-reaction`, and, on the channel's and a thread's Sink, an empty (or only whitespace) or
+over-long text are InvalidArgument; `no-thread` and `no-channel` are NotFound, and so is the
 catch-all's "not served yet", for any other name under a declared channel and for a verb the
 channel or the reaction does not take (Source, Exists or Delete on the channel, Source or
 Exists on a reaction, whose message names only the channel); a missing capability is Denied;
 Slack throttling or being unreachable is Unavailable, with Slack's retry-after when it gives
 one. Endpoint carries the rest: a rejection from Slack such as `not_in_channel` or a bad
 token, a failure to save the map or a timestamp from Slack of a shape the map cannot hold, a
-verb the thread does not take (Delete), and a poisoned map lock. The inbox's other refusals
-are the intray space's own, passed through unchanged: Denied for a caller without the space's
-`urn:cap:space:out`, `…:read` (or `…:read:{name}`) or `…:take`; NotFound for an empty
-space, a `match` nothing fits, or a tuple id that is gone; InvalidArgument for a bad `match`
-or `retry` argument; and Endpoint for Exists or any other verb the space does not take, and
-for a failure in the space's files.
+verb the thread does not take (Delete), and a poisoned map lock. A Sink with no text, or
+with text that is not UTF-8, to the channel, a thread or the inbox, is
+MissingArgument(`content`), the inbox's because its handler reads the text itself before
+forwarding. The inbox checks only that, and `no-channel` (NotFound) for an undeclared
+channel: it does not check the text's length or emptiness, so a Sink of empty `content`
+succeeds and lands an empty tuple. Every other answer from the inbox, a refusal or a
+failure, is the intray space's own, passed through unchanged, and this proposal does not
+restate them: the contract is the intray space's (ikigai-intray 0.1.64,
+`SpaceEndpoint::invoke`), which also refuses, among others, a `retry=` Sink without
+`urn:cap:space:retry`, a bad `state` or `content` argument, and a `match` past its time
+budget.
 
 **Code the change keeps**, one line each on why it cannot be a composition, or saying
 plainly that it could and is not yet:
