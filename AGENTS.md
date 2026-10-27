@@ -130,7 +130,8 @@ stop for what reading the repository, its openspec/ or this file settles.
    the one you would pick. Write the draft's URL on the first line of your report, then
    `Question for Dax:` and the question. Then stop. Don't guess, and don't widen the task.
 3. If the dispatcher's notes say `Continue draft PR #N`, start by merging its branch into yours
-   (`git fetch origin <its branch>`, then `git merge --no-edit FETCH_HEAD`), and begin your new
+   (`git fetch origin <its branch>`, then `git merge -m ". r Merge <branch> (ledger item N)"
+   FETCH_HEAD`, so the merge commit's summary keeps rule 4's notation), and begin your new
    draft's description with `Supersedes PR #N`.
 
 ## Specs, artifacts, queries and scripts
