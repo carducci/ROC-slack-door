@@ -65,7 +65,8 @@ impl<T: SlackTransport> Threads<T> {
         Self::open_channels(state_dir, &[(String::new(), channel.to_owned())], transport)
     }
 
-    /// Opens the map for the declared `channels`, each a (name, Slack id) pair.
+    /// Opens the map for the declared `channels`, each a (name, Slack id) pair. An id with a
+    /// control character is refused here, before anything can be posted to it.
     pub fn open_channels(
         state_dir: &Path,
         channels: &[(String, String)],
@@ -73,6 +74,12 @@ impl<T: SlackTransport> Threads<T> {
     ) -> io::Result<Self> {
         if channels.is_empty() {
             return Err(io::Error::new(io::ErrorKind::InvalidInput, "no channel declared"));
+        }
+        if let Some((_, id)) = channels.iter().find(|(_, id)| has_control(id)) {
+            return Err(io::Error::new(
+                io::ErrorKind::InvalidInput,
+                format!("a channel id with a control character: {id:?}"),
+            ));
         }
         fs::create_dir_all(state_dir)?;
         let threads = match fs::read_to_string(state_dir.join(MAP_FILE)) {
@@ -327,8 +334,8 @@ fn slot(channel: &str, key: &str) -> (String, String) {
 }
 
 /// Refuses a thread that cannot be one line of threads.tsv and read back the same: its key must
-/// be one `check_key` takes, its timestamp of Slack's shape, and its channel id must hold no tab
-/// or newline.
+/// be one `check_key` takes, its timestamp of Slack's shape, and its channel id must hold no
+/// control character: no tab or newline.
 fn check_line(key: &str, thread: &Thread) -> io::Result<()> {
     if check_key(key).is_err() {
         return Err(io::Error::new(
@@ -342,13 +349,18 @@ fn check_line(key: &str, thread: &Thread) -> io::Result<()> {
             format!("a timestamp of another shape: {:?}", thread.ts),
         ));
     }
-    if thread.channel.contains(['\t', '\n']) {
+    if has_control(&thread.channel) {
         return Err(io::Error::new(
             io::ErrorKind::InvalidData,
-            format!("a channel id with a tab or newline: {:?}", thread.channel),
+            format!("a channel id with a control character: {:?}", thread.channel),
         ));
     }
     Ok(())
+}
+
+/// Whether `id` holds a control character, a tab or newline among them: no Slack channel id does.
+fn has_control(id: &str) -> bool {
+    id.chars().any(char::is_control)
 }
 
 fn parse(text: &str) -> io::Result<BTreeMap<(String, String), Thread>> {
@@ -761,27 +773,25 @@ mod tests {
     }
 
     #[test]
-    fn a_channel_id_with_a_tab_or_newline_posts_nothing() {
-        for (n, bad) in ["C1\tx", "C1\nx"].iter().enumerate() {
+    fn a_channel_id_with_a_control_character_is_refused_at_open_so_nothing_is_posted() {
+        for (n, bad) in ["C1\tx", "C1\nx", "C1\rx", "C1\u{7f}"].iter().enumerate() {
             let dir = scratch(&format!("bad-channel-post-{n}"));
-            let mut threads = Threads::open(&dir, bad, FakeSlack::new()).unwrap();
-            for _ in 0..2 {
-                assert!(threads.write(&all(), "carducci-54", "Opening").is_err(), "{bad:?}");
-            }
-            assert!(threads.transport().posts().is_empty(), "{bad:?}");
+            // Opened, two writes would post twice before record refused the id; refused at
+            // open, there is no Threads to write through, and nothing reaches Slack.
+            let err = Threads::open(&dir, bad, FakeSlack::new()).err().expect("opened");
+            assert_eq!(err.kind(), io::ErrorKind::InvalidInput, "{bad:?}");
+            let channels = [("a".to_owned(), "C1".to_owned()), ("b".to_owned(), (*bad).to_owned())];
+            let err = Threads::open_channels(&dir, &channels, FakeSlack::new()).err().expect("opened");
+            assert_eq!(err.kind(), io::ErrorKind::InvalidInput, "{bad:?}");
+            assert!(!dir.join(MAP_FILE).exists(), "{bad:?}");
         }
     }
 
     #[test]
-    fn a_channel_id_with_a_tab_or_newline_is_refused_before_the_map() {
-        for (n, bad) in ["C1\tx", "C1\nx"].iter().enumerate() {
+    fn an_adopted_channel_id_with_a_control_character_is_refused_before_the_map() {
+        for (n, bad) in ["C1\tx", "C1\nx", "C1\rx"].iter().enumerate() {
             let dir = scratch(&format!("bad-channel-{n}"));
-            let mut threads = Threads::open(&dir, bad, FakeSlack::new()).unwrap();
-            let err = threads.write(&all(), "carducci-54", "Opening").unwrap_err();
-            assert!(
-                matches!(err, ThreadError::State(ref why) if why.kind() == io::ErrorKind::InvalidData),
-                "{bad:?}: {err:?}"
-            );
+            let mut threads = Threads::open(&dir, "C1", FakeSlack::new()).unwrap();
             let err = threads.adopt(bad, "k", "1700000100.000001").unwrap_err();
             assert_eq!(err.kind(), io::ErrorKind::InvalidData, "{bad:?}");
             assert!(!dir.join(MAP_FILE).exists(), "{bad:?}");
