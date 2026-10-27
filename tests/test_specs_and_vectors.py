@@ -2,7 +2,8 @@
 
 Every `#### Scenario:` in openspec/specs/ has exactly one entry in openspec/vectors.json, and
 every entry names a scenario in the specs or in a change still in flight (a change's new
-scenarios get their vectors while it is being built, before it is archived into the specs).
+scenarios get their vectors while it is being built, before it is archived into the specs). A
+scenario of a requirement a change in flight REMOVES needs no vector.
 A scenario is named by the IRI the OpenSpec mapping gives it,
 `urn:openspec:spec:<capability>:requirement:<slug>:scenario:<slug>`, which is also how the
 lifted spec graph and the ledger's items name it.
@@ -66,12 +67,34 @@ def in_flight() -> list[str]:
     return found
 
 
+def removed_in_flight() -> set[str]:
+    """The IRIs of the requirements a change in flight REMOVES from the specs."""
+    found = set()
+    for change in sorted((OPENSPEC / "changes").iterdir()):
+        if not change.is_dir() or change.name == "archive":
+            continue
+        for delta in sorted(change.glob("specs/*/spec.md")):
+            removing = False
+            for line in delta.read_text(encoding="utf-8").splitlines():
+                if line.startswith("## "):
+                    removing = line.strip() == "## REMOVED Requirements"
+                m = REQUIREMENT.match(line)
+                if removing and m:
+                    found.add(gonk.requirement_iri(delta.parent.name, m.group(1)))
+    return found
+
+
 class SpecsAndVectors(unittest.TestCase):
     vectors = json.loads((OPENSPEC / "vectors.json").read_text(encoding="utf-8"))
 
     def test_every_scenario_in_the_specs_has_one_vector(self):
+        # A scenario of a requirement a change in flight removes needs none: its behaviour is
+        # gone from the code, and the change's replacement scenario carries the vector.
         ids = Counter(s["id"] for s in self.vectors["scenarios"])
-        missing = [s for s in current() if s not in ids]
+        removed = removed_in_flight()
+        missing = [
+            s for s in current() if s not in ids and s.split(":scenario:")[0] not in removed
+        ]
         self.assertEqual(missing, [], "scenarios in openspec/specs/ with no vector")
         twice = sorted(s for s, n in ids.items() if n > 1)
         self.assertEqual(twice, [], "scenarios with more than one vector")
