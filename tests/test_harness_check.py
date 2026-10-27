@@ -181,6 +181,23 @@ class GuideTextTest(unittest.TestCase):
         )
         self.assertEqual(1, len(self.problems("last-command-exit-status")))
 
+    def test_a_guide_that_quotes_only_its_heading_fails(self) -> None:
+        # ikigai-slack#196: the heading's words alone let the rule's body drift unchecked.
+        self.guide("reproduce-before-fix", "`Reproduce before you fix`: do whatever the item says.")
+        self.edit(
+            "AGENTS.md",
+            r"A bug report, a review finding, or a measurement someone else made is a \*\*claim\*\*",
+            "Just do what the item says. A bug report is a task",
+        )
+        self.assertEqual(
+            [
+                f"{GUIDES}reproduce-before-fix: quotes only the heading of AGENTS.md "
+                "`## 3. Reproduce before you fix`; quote, in backticks, a phrase the section "
+                "says under it"
+            ],
+            harness.check(self.repo),
+        )
+
     def test_every_guide_quotes_its_section(self) -> None:
         unquoted = [g for g, c in self.comments().items() if not re.search(r"`[^`\n]+`", c)]
         self.assertEqual([], unquoted)
@@ -219,6 +236,24 @@ class GuideTextTest(unittest.TestCase):
         )
         self.assertEqual([], harness.check(self.repo))
 
+    def test_a_line_opening_with_a_backtick_code_span_opens_no_fence(self) -> None:
+        # ikigai-slack#198: CommonMark 4.5, a backtick fence's info string holds no backtick.
+        self.edit(
+            "AGENTS.md",
+            r"^(?=1\. Open your pull request as a draft)",
+            "``` `#N` ``` is how a code span holds backticks.\n\n",
+        )
+        self.assertEqual([], harness.check(self.repo))
+
+    def test_a_fence_closes_only_on_its_own_character_at_least_as_long(self) -> None:
+        # ikigai-slack#198: a shorter run, or the other character, leaves the fence open.
+        self.edit(
+            "AGENTS.md",
+            r"^(?=1\. Open your pull request as a draft)",
+            "````\n```\n~~~~\n## not a heading\n`````\n\n",
+        )
+        self.assertEqual([], harness.check(self.repo))
+
     def test_emphasis_and_links_read_as_their_words(self) -> None:
         self.edit(
             "AGENTS.md",
@@ -228,6 +263,52 @@ class GuideTextTest(unittest.TestCase):
         self.guide("claim-before-write", "`No claim, no write. Read the loop.`")
         self.assertEqual([], harness.check(self.repo))
 
+    def test_inline_markdown_reads_as_its_words(self) -> None:
+        # ikigai-slack#199: each form AGENTS.md might use, read as a reader sees it.
+        for markdown, words in [
+            ("*Really* never.", "Really never."),
+            ("_Really_ never.", "Really never."),
+            ("***Really*** never.", "Really never."),
+            ("__Really__ never.", "Really never."),
+            ("**a *b* c** d", "a b c d"),
+            ("See [the loop](#the-loop \"t\").", "See the loop."),
+            ("See [the loop](#the-loop 't').", "See the loop."),
+            ("See [the loop](<#the loop> (t)).", "See the loop."),
+            ("See ![the loop](loop.png \"t\").", "See the loop."),
+            ("2\\*3 never.", "2*3 never."),
+            ("\\*not emphasis\\*", "*not emphasis*"),
+            ("\\`not code\\`", "`not code`"),
+            ("a\\\nb", "a b"),
+            ("&amp; &lt;b&gt; &#42;x&#42; &#x2A; &copy;", "& <b> *x* * ©"),
+            ("&nosuch; &amp", "&nosuch; &amp"),
+            ("<mailto:a@b.c> <https://x.y/z>", "mailto:a@b.c https://x.y/z"),
+            ("`a\\*b` `&amp;` `*c*`", "a\\*b &amp; *c*"),
+            ("snake_case_name and 2 * 3 and a*b", "snake_case_name and 2 * 3 and a*b"),
+            ("*see `x` here*", "see x here"),
+        ]:
+            with self.subTest(markdown=markdown):
+                self.assertEqual(words, harness.flat(harness.inline(markdown)))
+
+    def test_emphasis_titles_escapes_and_entities_in_agents_md_match(self) -> None:
+        # The four reproductions of ikigai-slack#199, through the check.
+        for added, quote in [
+            ("*Really* never.", "No claim, no write. Really never."),
+            ("_Really_ never.", "No claim, no write. Really never."),
+            ('See [the loop](#the-loop "t").', "No claim, no write. See the loop."),
+            ("2\\*3 never.", "No claim, no write. 2*3 never."),
+            ("&amp; never.", "No claim, no write. & never."),
+        ]:
+            with self.subTest(added=added):
+                shutil.copy(ROOT / "AGENTS.md", self.repo / "AGENTS.md")
+                self.restore()
+                self.edit(
+                    "AGENTS.md",
+                    r"^- \*\*No claim, no write\.\*\*",
+                    f"- **No claim, no write.** {added}",
+                )
+                self.guide("claim-before-write", f"`{quote}`")
+                self.assertEqual([], harness.check(self.repo))
+
     # statedIn is a file inside this repository, compared by what it resolves to.
 
     def test_a_stated_in_path_outside_the_repository_fails(self) -> None:
@@ -235,7 +316,7 @@ class GuideTextTest(unittest.TestCase):
         (self.outside / "x").mkdir()
         shutil.copy(self.repo / "AGENTS.md", self.outside / "x" / "RULES.md")
         (self.repo / "out").symlink_to(self.outside / "x" / "RULES.md")
-        for name in (str(self.outside / "x" / "RULES.md"), "../x/RULES.md", "out"):
+        for name in ("../x/RULES.md", "out"):
             with self.subTest(name=name):
                 self.restore()
                 self.guide("ask-dax-continue-draft", stated_in=name)
@@ -243,6 +324,22 @@ class GuideTextTest(unittest.TestCase):
                     [
                         f"{GUIDES}ask-dax-continue-draft: statedIn {name!r}, "
                         "which is outside this repository"
+                    ],
+                    self.problems("ask-dax-continue-draft"),
+                )
+
+    def test_an_absolute_stated_in_path_is_not_relative_to_the_repository(self) -> None:
+        # ikigai-slack#197: refused whether it names a file outside the repository or inside.
+        (self.outside / "x").mkdir()
+        shutil.copy(self.repo / "AGENTS.md", self.outside / "x" / "RULES.md")
+        for name in (str(self.outside / "x" / "RULES.md"), str(self.repo / "AGENTS.md")):
+            with self.subTest(name=name):
+                self.restore()
+                self.guide("ask-dax-continue-draft", stated_in=name)
+                self.assertEqual(
+                    [
+                        f"{GUIDES}ask-dax-continue-draft: statedIn {name!r}, "
+                        "which is not a path relative to this repository's root"
                     ],
                     self.problems("ask-dax-continue-draft"),
                 )
