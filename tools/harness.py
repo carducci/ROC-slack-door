@@ -663,6 +663,7 @@ def check(repo: Path) -> list[str]:
     """Everything that disagrees between this repository's harness graph, its vocabulary, its
     code and its AGENTS.md, as sentences. Empty is agreement."""
     bad: list[str] = []
+    root = repo.resolve()
     try:
         vocab = read_graph(repo / VOCAB_FILE)
         g = read_graph(repo / GRAPH_FILE)
@@ -723,7 +724,7 @@ def check(repo: Path) -> list[str]:
             if not is_local(where):
                 continue
             path, _, name = where.partition("#")
-            file, why = stated_file(repo.resolve(), path)
+            file, why = repo_file(root, path)
             if file is None:
                 bad.append(f"{s.value}: enforcedAt {where}, and {path} {why}")
             elif name and not defined_in(file, name):
@@ -758,13 +759,12 @@ def check(repo: Path) -> list[str]:
 
     # The file each guide is stated in, inside this repository: it cites a heading the file
     # has, and quotes that section, word for word. AGENTS.md: every rule heading has a guide.
-    root = repo.resolve()
     agents_md = root / "AGENTS.md"
     read: dict[Path, dict[str, Section] | str] = {}
     cited = set()
     for s in sorted(guides, key=lambda t: t.value):
         for name in g.values(s, H + "statedIn"):
-            path, why = stated_file(root, name)
+            path, why = repo_file(root, name)
             if path is not None and path not in read:
                 read[path] = read_sections(path)
             sections = read[path] if path is not None else why
@@ -825,10 +825,11 @@ def check(repo: Path) -> list[str]:
     return bad
 
 
-def stated_file(root: Path, name: str) -> tuple[Path | None, str]:
-    """The file a guide's statedIn names, resolved against the repository's root (as
-    vocabulary.ttl defines it), or None and why: an absolute path is refused wherever it
-    points, and one that leaves the repository through `..` or by a symlink names no file of it."""
+def repo_file(root: Path, name: str) -> tuple[Path | None, str]:
+    """The file a guide's statedIn or a control's enforcedAt names, resolved against the
+    repository's root (as vocabulary.ttl defines both), or None and why: an absolute path is
+    refused wherever it points, and one that leaves the repository through `..` or by a symlink
+    names no file of it."""
     if Path(name).is_absolute():
         return None, "is not a path relative to this repository's root"
     path = (root / name).resolve()
