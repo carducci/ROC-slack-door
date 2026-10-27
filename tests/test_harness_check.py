@@ -6,12 +6,13 @@ from __future__ import annotations
 import contextlib
 import importlib.util
 import io
+import os
 import re
 import shutil
 import sys
 import tempfile
 import unittest
-from pathlib import Path
+from pathlib import Path, PureWindowsPath
 from unittest import mock
 
 ROOT = Path(__file__).resolve().parent.parent
@@ -71,6 +72,16 @@ def make_only_windows_names(test: unittest.TestCase) -> None:
         test.addCleanup(patcher.stop)
 
 
+def absolute_paths(outside: Path, inside: Path, name: str) -> tuple[str, str, str]:
+    """Absolute paths a test writes as a statedIn or an enforcedAt, spelled with /: `name` in
+    `outside`/x, `inside` itself, and `name` under a directory `x:` of `outside`."""
+    return (
+        (outside / "x" / name).as_posix(),
+        inside.as_posix(),
+        (outside / "x:" / name).as_posix(),
+    )
+
+
 class WindowsNamesTest(unittest.TestCase):
     """The guard the tests below make files under: a name Windows refuses is refused here."""
 
@@ -99,6 +110,86 @@ class WindowsNamesTest(unittest.TestCase):
         self.assertFalse((Path(tmp.name) / "x:").exists())
         (Path(tmp.name) / "x").mkdir()
         self.assertTrue((Path(tmp.name) / "x").is_dir())
+
+    def test_the_names_are_read_as_windows_reads_them(self) -> None:
+        # ikigai-slack#239: on Windows, Path is WindowsPath, which joins and splits as
+        # PureWindowsPath does. Nothing here runs on Windows, so model it.
+        with mock.patch.object(sys.modules[__name__], "Path", PureWindowsPath):
+            self.test_a_name_windows_refuses_is_refused()
+            self.test_a_name_windows_takes_is_taken()
+
+    def test_a_drive_a_join_made_is_refused(self) -> None:
+        # ikigai-slack#239: Windows reads a joined `x:` as a drive, which drops what came
+        # before it. The guard refuses what that join makes, on every platform.
+        for path in (PureWindowsPath("/tmp") / "x:" / "ci.yml", "x:ci.yml", "x:"):
+            with self.subTest(path=str(path)):
+                self.assertEqual("x:", windows_refuses(path))
+
+    def test_an_absolute_path_is_absolute_on_windows(self) -> None:
+        # ikigai-slack#239: on Windows the third of these was the drive-relative `x:ci.yml`.
+        outside = PureWindowsPath("C:\\Users\\me\\AppData\\Local\\Temp\\tmp1")
+        paths = absolute_paths(outside, outside / "repo" / "AGENTS.md", "ci.yml")
+        for path in paths:
+            with self.subTest(path=path):
+                self.assertTrue(path.startswith("C:/Users/me/AppData/Local/Temp/tmp1/"))
+                self.assertTrue(PureWindowsPath(path).is_absolute())
+        self.assertEqual("x:", windows_refuses(paths[2]))
+
+    def test_every_way_a_test_makes_a_name_is_guarded(self) -> None:
+        # ikigai-slack#240: each of these made `a:b` here with no error, so a test that made
+        # one passed here and failed on Windows.
+        tmp = tempfile.TemporaryDirectory()
+        self.addCleanup(tmp.cleanup)
+        at = Path(tmp.name)
+        (at / "ok").write_text("ok", encoding="utf-8")
+        (at / "tree").mkdir()
+        if os.name != "nt":  # Windows can't hold a bad name in a tree to copy, so has none to guard
+            (at / "tree" / "a:b").write_text("x", encoding="utf-8")
+        make_only_windows_names(self)
+        bad = at / "a:b"
+        makers = {
+            "Path.mkdir": lambda: bad.mkdir(),
+            "Path.touch": lambda: bad.touch(),
+            "Path.write_text": lambda: bad.write_text("x", encoding="utf-8"),
+            "Path.write_bytes": lambda: bad.write_bytes(b"x"),
+            "Path.open": lambda: bad.open("w").close(),
+            "Path.symlink_to": lambda: bad.symlink_to(at / "ok"),
+            "Path.hardlink_to": lambda: bad.hardlink_to(at / "ok"),
+            "Path.rename": lambda: (at / "ok").rename(bad),
+            "Path.replace": lambda: (at / "ok").replace(bad),
+            "open": lambda: open(bad, "w").close(),
+            "open, x": lambda: open(bad, "x").close(),
+            "open, a": lambda: open(bad, "a").close(),
+            "os.open": lambda: os.close(os.open(bad, os.O_WRONLY | os.O_CREAT)),
+            "os.mkdir": lambda: os.mkdir(bad),
+            "os.makedirs": lambda: os.makedirs(bad / "c"),
+            "os.rename": lambda: os.rename(at / "ok", bad),
+            "os.replace": lambda: os.replace(at / "ok", bad),
+            "os.symlink": lambda: os.symlink(at / "ok", bad),
+            "os.link": lambda: os.link(at / "ok", bad),
+            "shutil.copy": lambda: shutil.copy(at / "ok", bad),
+            "shutil.copy2": lambda: shutil.copy2(at / "ok", bad),
+            "shutil.copyfile": lambda: shutil.copyfile(at / "ok", bad),
+            "shutil.move": lambda: shutil.move(at / "ok", bad),
+            "shutil.copytree": lambda: shutil.copytree(at / "tree", bad),
+            "tempfile.mkdtemp": lambda: tempfile.mkdtemp(dir=at, prefix="a:"),
+        }
+        if os.name != "nt":
+            makers["shutil.copytree, a name inside"] = lambda: shutil.copytree(at / "tree", at / "t")
+        for maker, make in makers.items():
+            with self.subTest(maker=maker):
+                try:
+                    with self.assertRaises(OSError):
+                        make()
+                finally:
+                    made = [p for p in at.iterdir() if ":" in p.name] + list(at.glob("t/*"))
+                    for p in made:
+                        shutil.rmtree(p) if p.is_dir() and not p.is_symlink() else p.unlink()
+                    moved = not (at / "ok").exists()
+                    if moved:
+                        (at / "ok").write_text("ok", encoding="utf-8")
+                self.assertEqual([], [p.relative_to(at).as_posix() for p in made])
+                self.assertFalse(moved, "ok was moved")
 
 
 class HarnessCheckTest(unittest.TestCase):
@@ -623,9 +714,7 @@ class GuideTextTest(unittest.TestCase):
         # platform, and a path is written with / so it is one on every platform. A colon is
         # refused from the string alone, so `x:` is never made: Windows can't (ikigai-slack#237).
         for name in (
-            (self.outside / "x" / "RULES.md").as_posix(),
-            (self.repo / "AGENTS.md").as_posix(),
-            (self.outside / "x:" / "RULES.md").as_posix(),
+            *absolute_paths(self.outside, self.repo / "AGENTS.md", "RULES.md"),
             "C:/Windows/win.ini",
             "C:\\x\\RULES.md",
             "C:AGENTS.md",
@@ -720,9 +809,7 @@ class ControlCodeTest(unittest.TestCase):
         # (ikigai-slack#235). A path is written with / so it is one on every platform. A colon is
         # refused from the string alone, so `x:` is never made: Windows can't (ikigai-slack#237).
         for where in (
-            (self.outside / "x" / "ci.yml").as_posix(),
-            (self.repo / ".github/workflows/ci.yml").as_posix(),
-            (self.outside / "x:" / "ci.yml").as_posix(),
+            *absolute_paths(self.outside, self.repo / ".github/workflows/ci.yml", "ci.yml"),
             "C:/Windows/win.ini",
             "C:\\x\\ci.yml",
             "C:.github/workflows/ci.yml",
