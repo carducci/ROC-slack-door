@@ -117,6 +117,21 @@ def make_only_windows_names(test: unittest.TestCase) -> None:
         test.addCleanup(patcher.stop)
 
 
+def symlink_or_skip(test: unittest.TestCase, link: Path, target: Path) -> None:
+    """Make `link` a symlink to `target`, or skip `test` (or its subtest) where the platform
+    refuses: Windows without Developer Mode or administrator rights raises WinError 1314,
+    ERROR_PRIVILEGE_NOT_HELD (ikigai-slack#241). Any other error is raised."""
+    try:
+        link.symlink_to(target)
+    except OSError as error:
+        if getattr(error, "winerror", None) != 1314:
+            raise
+        test.skipTest(
+            f"this platform refuses a symlink (WinError 1314: needs Developer Mode or "
+            f"administrator rights): {error}"
+        )
+
+
 def absolute_paths(outside: Path, inside: Path, name: str) -> tuple[str, str, str]:
     """Absolute paths a test writes as a statedIn or an enforcedAt, spelled with /: `name` in
     `outside`/x, `inside` itself, and `name` under a directory `x:` of `outside`. The last is
@@ -799,9 +814,10 @@ class GuideTextTest(unittest.TestCase):
         # P1 and P1b of ikigai-slack#187.
         (self.outside / "x").mkdir()
         shutil.copy(self.repo / "AGENTS.md", self.outside / "x" / "RULES.md")
-        (self.repo / "out").symlink_to(self.outside / "x" / "RULES.md")
         for name in ("../x/RULES.md", "out"):
             with self.subTest(name=name):
+                if name == "out":
+                    symlink_or_skip(self, self.repo / "out", self.outside / "x" / "RULES.md")
                 self.restore()
                 self.guide("ask-dax-continue-draft", stated_in=name)
                 self.assertEqual(
