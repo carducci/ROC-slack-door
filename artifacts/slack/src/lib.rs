@@ -6,10 +6,10 @@
 //! mints.
 //! Everything Slack-specific sits behind a `SlackTransport`, so every scenario in
 //! `openspec/` runs against a fake with no network. What each resource does is specified in
-//! `openspec/changes/slack-resources/` until that change is archived into `openspec/specs/`.
+//! `openspec/specs/`.
 //!
-//! The transport, its in-memory fake and the thread resource are in place; reactions and the
-//! inbox are not yet.
+//! The transport, its in-memory fake, the thread and reaction resources and the inbox are in
+//! place.
 
 use std::collections::{BTreeSet, VecDeque};
 
