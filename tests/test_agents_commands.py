@@ -3,7 +3,10 @@
 Agents read AGENTS.md raw, so a command it tells them to copy has to be copyable and true:
 a code span sits on one source line, a merge subject it prescribes carries the merge
 intention `m` that rule 4 lists, and one step never uses one placeholder for two values
-(`N` for both a pull request and a ledger item, or two names for one branch).
+(`N` for both a pull request and a ledger item, or two names for one branch). Rule 4 names
+its one exception, the merge commits GitHub writes (merging a pull request, or updating its
+branch from main), which keep GitHub's subject; and the harness guide that tells a worker to
+merge a draft names the same subject AGENTS.md prescribes.
 """
 
 from __future__ import annotations
@@ -14,9 +17,13 @@ from pathlib import Path
 
 ROOT = Path(__file__).resolve().parent.parent
 AGENTS = ROOT / "AGENTS.md"
+HARNESS = ROOT / ".gonk" / "harness" / "harness.ttl"
 
 MERGE_COMMAND = re.compile(r'git merge\b[^`]*?-m "([^"`]*)"')
 INTENTION_BULLET = re.compile(r"- Intention, exactly one per commit\.(.*?)(?=\n  - |\n\n)", re.DOTALL)
+RULE_4 = re.compile(r"^## 4\. .*?(?=^## )", re.DOTALL | re.MULTILINE)
+GITHUB_MERGE_BULLET = re.compile(r"- [^\n]*merge commit GitHub writes.*?(?=\n  - |\n\n)", re.DOTALL)
+CONTINUE_DRAFT_GUIDE = re.compile(r'guide:ask-dax-continue-draft a harness:Guide ;.*?rdfs:comment "([^"]*)"', re.DOTALL)
 PLACEHOLDER = re.compile(r"<([a-z][a-z ]*)>")
 COMMAND = re.compile(r"`(?:git|gh|python3|just) ")
 ITEM_START = re.compile(r"^\s*(?:\d+\.|-)\s")
@@ -55,6 +62,27 @@ class PrescribedCommandsTest(unittest.TestCase):
         bullet = INTENTION_BULLET.search(text())
         self.assertIsNotNone(bullet, "rule 4's intention bullet is missing")
         self.assertIn("`m`", bullet.group(1), "rule 4 lists no intention for a merge commit")
+
+    def test_rule_4_excepts_the_merge_commits_github_writes(self) -> None:
+        rule = RULE_4.search(text())
+        self.assertIsNotNone(rule, "AGENTS.md has no rule 4")
+        bullet = GITHUB_MERGE_BULLET.search(rule.group())
+        self.assertIsNotNone(bullet, "rule 4 does not say how a merge commit GitHub writes is handled")
+        exception = " ".join(bullet.group().split())  # the bullet wraps across source lines
+        for case in ["merging a pull request", "updating its branch from main"]:
+            self.assertIn(case, exception, f"rule 4's exception does not name {case}")
+        self.assertIn("keeps GitHub's subject", exception, "rule 4 does not say GitHub's merge keeps its subject")
+        self.assertRegex(exception, r"merge commit you write.*uses `m`",
+                         "rule 4 does not say a merge commit you write uses `m`")
+
+    def test_the_continue_draft_guide_names_the_prescribed_merge_subject(self) -> None:
+        guide = CONTINUE_DRAFT_GUIDE.search(HARNESS.read_text(encoding="utf-8"))
+        self.assertIsNotNone(guide, "harness.ttl has no guide:ask-dax-continue-draft with a comment")
+        subjects = MERGE_COMMAND.findall(text())
+        self.assertTrue(subjects, "AGENTS.md prescribes no `git merge -m` command")
+        for subject in subjects:
+            self.assertIn(f"`{subject}`", guide.group(1),
+                          f"guide:ask-dax-continue-draft does not name the subject AGENTS.md prescribes: {subject!r}")
 
     def test_a_prescribed_merge_subject_uses_the_merge_intention(self) -> None:
         subjects = MERGE_COMMAND.findall(text())
