@@ -850,6 +850,34 @@ class GuideTextTest(unittest.TestCase):
         self.assertIn("refuses a symlink", reason)
         self.assertIn("1314", reason)
 
+    def test_a_symlink_error_other_than_1314_is_raised_not_skipped(self) -> None:
+        # ikigai-slack#251: symlink_or_skip skips only WinError 1314. Any other OSError, such as
+        # a PermissionError with no winerror or a Windows error other than 1314, is a fault the
+        # case reports as an error, never as a skip.
+        def permission(link: Path, target, target_is_directory: bool = False) -> None:
+            raise PermissionError(errno.EPERM, "Operation not permitted", os.fspath(link))
+
+        def access_denied(link: Path, target, target_is_directory: bool = False) -> None:
+            error = OSError(errno.EACCES, "Access is denied", os.fspath(target), 5, os.fspath(link))
+            if not hasattr(error, "winerror"):  # only Windows keeps the fourth argument
+                error.winerror = 5
+            raise error
+
+        for refuse in (permission, access_denied):
+            with self.subTest(refuse=refuse.__name__):
+                case = GuideTextTest("test_a_stated_in_path_outside_the_repository_fails")
+                result = unittest.TestResult()
+                with mock.patch.object(Path, "symlink_to", refuse):
+                    case.run(result)
+                self.assertEqual(([], []), (result.skipped, result.failures))
+                self.assertEqual(1, len(result.errors), result.errors)
+                errored, trace = result.errors[0]
+                self.assertIn("name='out'", errored.id())
+                self.assertIn(
+                    "Operation not permitted" if refuse is permission else "Access is denied",
+                    trace,
+                )
+
     def test_an_absolute_stated_in_path_is_not_relative_to_the_repository(self) -> None:
         # ikigai-slack#197: refused whether it names a file outside the repository or inside.
         (self.outside / "x").mkdir()
