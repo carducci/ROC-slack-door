@@ -12,6 +12,16 @@ MUST NOT read the environment or any file for them: the door passes them in.
 - **WHEN** the door starts with no app-level token configured
 - **THEN** it refuses to start, naming the app-level token
 
+### Requirement: Secrets never leave the door
+
+The tokens MUST NOT appear in any representation, description (`Meta`), log line or error the
+door produces.
+
+#### Scenario: Describing a thread
+
+- **WHEN** a caller asks for the description of `urn:slack:channel:gonk-chat:thread:carducci-54`
+- **THEN** the answer contains neither token
+
 ### Requirement: Capabilities gate the verbs
 
 Each verb SHALL require a capability scoped to the channel it acts in:
