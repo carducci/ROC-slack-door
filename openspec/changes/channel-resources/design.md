@@ -77,11 +77,22 @@ kept.
 ## Fitness functions
 
 - The spec-and-vector agreement test (already in CI) fails if any scenario here has no vector.
-- A test in `tests/`, run by `python3 scripts/test.py` and written by task 4.1, that fails if
-  any file under `artifacts/` contains `urn:slack:thread:` (the old thread and reaction names,
-  bound without a channel) or one of the global capabilities `urn:cap:slack:read`,
-  `urn:cap:slack:post`, `urn:cap:slack:react`, so the old names can't come back. The scoped
-  `urn:cap:slack:channel:{name}:read` has `channel:` between and never matches.
+- Two tests, written by task 4.1, so the old names can't come back: one over the source and
+  one over what is served, because the first alone is a denylist of bytes that a string escape
+  (`"urn:slack:\x74hread:{key}"`), a `format!` of the pieces, a template with a wider variable
+  (`urn:slack:{space}:{key}`) or an endpoint name with no trailing colon gets past while the
+  program still serves the same names.
+  - In `tests/`, run by `python3 scripts/test.py`: fails if any file under `artifacts/`
+    contains `urn:slack:thread:` (the old thread and reaction names, bound without a channel)
+    or one of the global capabilities `urn:cap:slack:read`, `urn:cap:slack:post`,
+    `urn:cap:slack:react`. The scoped `urn:cap:slack:channel:{name}:read` has `channel:`
+    between and never matches.
+  - In the door's and the library's own `cargo test`, also run by `python3 scripts/test.py`,
+    through the kernel: `Exists` and `Sink` on `urn:slack:thread:k` and on
+    `urn:slack:thread:k:reaction:x` answer that nothing is bound there (not a thread's
+    `no-thread` or a channel's `no-channel`, which an endpoint answers), and every capability
+    in `descriptions()` starts with `urn:cap:slack:channel:`. These check what is served,
+    however it is spelled.
 
 ## Open
 
