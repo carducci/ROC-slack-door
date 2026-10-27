@@ -131,7 +131,7 @@ stop for what reading the repository, its openspec/ or this file settles.
    `Question for Dax:` and the question. Then stop. Don't guess, and don't widen the task.
 3. If the dispatcher's notes say `Continue draft PR #N`, start by merging its branch into yours
    (`git fetch origin <its branch>`, then `git merge --no-edit FETCH_HEAD`), and begin your new
-   draft's description with `Supersedes #N`.
+   draft's description with `Supersedes PR #N`.
 
 ## Specs, artifacts, queries and scripts
 
