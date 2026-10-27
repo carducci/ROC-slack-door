@@ -801,10 +801,12 @@ def check(repo: Path) -> list[str]:
 
 def stated_file(root: Path, name: str) -> tuple[Path | None, str]:
     """The file a guide's statedIn names, resolved against the repository's root (as
-    vocabulary.ttl defines it), or None and why: absolute, through `..` or by a symlink, a
-    path that leaves the repository names no file of it."""
+    vocabulary.ttl defines it), or None and why: an absolute path is refused wherever it
+    points, and one that leaves the repository through `..` or by a symlink names no file of it."""
+    if Path(name).is_absolute():
+        return None, "is not a path relative to this repository's root"
     path = (root / name).resolve()
-    if Path(name).is_absolute() or not path.is_relative_to(root):
+    if not path.is_relative_to(root):
         return None, "is outside this repository"
     if not path.is_file():
         return None, "is not in this repository"
