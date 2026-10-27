@@ -117,6 +117,21 @@ def make_only_windows_names(test: unittest.TestCase) -> None:
         test.addCleanup(patcher.stop)
 
 
+def symlink_or_skip(test: unittest.TestCase, link: Path, target: Path) -> None:
+    """Make `link` a symlink to `target`, or skip `test` (or its subtest) where the platform
+    refuses: Windows without Developer Mode or administrator rights raises WinError 1314,
+    ERROR_PRIVILEGE_NOT_HELD (ikigai-slack#241). Any other error is raised."""
+    try:
+        link.symlink_to(target)
+    except OSError as error:
+        if getattr(error, "winerror", None) != 1314:
+            raise
+        test.skipTest(
+            f"this platform refuses a symlink (WinError 1314: needs Developer Mode or "
+            f"administrator rights): {error}"
+        )
+
+
 def absolute_paths(outside: Path, inside: Path, name: str) -> tuple[str, str, str]:
     """Absolute paths a test writes as a statedIn or an enforcedAt, spelled with /: `name` in
     `outside`/x, `inside` itself, and `name` under a directory `x:` of `outside`. The last is
@@ -799,9 +814,10 @@ class GuideTextTest(unittest.TestCase):
         # P1 and P1b of ikigai-slack#187.
         (self.outside / "x").mkdir()
         shutil.copy(self.repo / "AGENTS.md", self.outside / "x" / "RULES.md")
-        (self.repo / "out").symlink_to(self.outside / "x" / "RULES.md")
         for name in ("../x/RULES.md", "out"):
             with self.subTest(name=name):
+                if name == "out":
+                    symlink_or_skip(self, self.repo / "out", self.outside / "x" / "RULES.md")
                 self.restore()
                 self.guide("ask-dax-continue-draft", stated_in=name)
                 self.assertEqual(
@@ -810,6 +826,56 @@ class GuideTextTest(unittest.TestCase):
                         "which is outside this repository"
                     ],
                     self.problems("ask-dax-continue-draft"),
+                )
+
+    def test_a_refused_symlink_skips_only_its_own_case(self) -> None:
+        # ikigai-slack#241: Windows without Developer Mode or administrator rights refuses a
+        # symlink with WinError 1314, and the case that needs one errored. Nothing here runs on
+        # Windows, so model the refusal: that case skips with its reason, and the rest still run.
+        def refuse(link: Path, target, target_is_directory: bool = False) -> None:
+            error = OSError(errno.EINVAL, "A required privilege is not held by the client",
+                            os.fspath(target), 1314, os.fspath(link))
+            if not hasattr(error, "winerror"):  # only Windows keeps the fourth argument
+                error.winerror = 1314
+            raise error
+
+        case = GuideTextTest("test_a_stated_in_path_outside_the_repository_fails")
+        result = unittest.TestResult()
+        with mock.patch.object(Path, "symlink_to", refuse):
+            case.run(result)
+        self.assertEqual(([], []), (result.errors, result.failures))
+        self.assertEqual(1, len(result.skipped), result.skipped)
+        skipped, reason = result.skipped[0]
+        self.assertIn("name='out'", skipped.id())
+        self.assertIn("refuses a symlink", reason)
+        self.assertIn("1314", reason)
+
+    def test_a_symlink_error_other_than_1314_is_raised_not_skipped(self) -> None:
+        # ikigai-slack#251: symlink_or_skip skips only WinError 1314. Any other OSError, such as
+        # a PermissionError with no winerror or a Windows error other than 1314, is a fault the
+        # case reports as an error, never as a skip.
+        def permission(link: Path, target, target_is_directory: bool = False) -> None:
+            raise PermissionError(errno.EPERM, "Operation not permitted", os.fspath(link))
+
+        def access_denied(link: Path, target, target_is_directory: bool = False) -> None:
+            error = OSError(errno.EACCES, "Access is denied", os.fspath(target), 5, os.fspath(link))
+            if not hasattr(error, "winerror"):  # only Windows keeps the fourth argument
+                error.winerror = 5
+            raise error
+
+        for refuse in (permission, access_denied):
+            with self.subTest(refuse=refuse.__name__):
+                case = GuideTextTest("test_a_stated_in_path_outside_the_repository_fails")
+                result = unittest.TestResult()
+                with mock.patch.object(Path, "symlink_to", refuse):
+                    case.run(result)
+                self.assertEqual(([], []), (result.skipped, result.failures))
+                self.assertEqual(1, len(result.errors), result.errors)
+                errored, trace = result.errors[0]
+                self.assertIn("name='out'", errored.id())
+                self.assertIn(
+                    "Operation not permitted" if refuse is permission else "Access is denied",
+                    trace,
                 )
 
     def test_an_absolute_stated_in_path_is_not_relative_to_the_repository(self) -> None:
