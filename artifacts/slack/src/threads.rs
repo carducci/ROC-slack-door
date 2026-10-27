@@ -859,11 +859,18 @@ mod tests {
     }
 
     #[test]
-    fn a_map_line_whose_channel_id_has_a_control_character_is_refused_on_open() {
-        for (n, bad) in ["C1\rx", "C1\u{7f}", "C1\u{0}"].iter().enumerate() {
-            let dir = legacy_dir(&format!("bad-channel-line-{n}"), &format!("k\t{bad}\t1700000100.000001\n"));
-            let err = Threads::open(&dir, "C1", FakeSlack::new()).err().unwrap();
-            assert_eq!(err.kind(), io::ErrorKind::InvalidData, "{bad:?}");
+    fn a_map_line_whose_channel_id_has_a_control_character_is_kept_after_open_and_a_save() {
+        // Such a line reads back the same, and only an undeclared channel can have one: design
+        // D6 keeps it, as it keeps every line for an undeclared channel.
+        let channels = [("gonk-chat".to_owned(), "C1".to_owned())];
+        for (n, odd) in ["C1\rx", "C1\u{7f}", "C1\u{0}"].iter().enumerate() {
+            let line = format!("k\t{odd}\t1700000100.000001");
+            let dir = legacy_dir(&format!("odd-channel-line-{n}"), &format!("{line}\n"));
+            let mut threads = Threads::open_channels(&dir, &channels, FakeSlack::new()).unwrap();
+            assert!(threads.adopt("C1", "other", "1700000200.000001").unwrap(), "{odd:?}");
+            drop(threads);
+            let saved = fs::read_to_string(dir.join(MAP_FILE)).unwrap();
+            assert!(saved.lines().any(|l| l == line), "{odd:?}: {saved:?}");
         }
     }
 
