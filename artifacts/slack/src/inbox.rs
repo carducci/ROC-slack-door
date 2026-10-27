@@ -1,6 +1,7 @@
 //! The inbox: what allowed people say in the configured channel, turned into deliveries for a
 //! host to act on. A delivery names the thread it belongs to by the key the caller chose, never
-//! by a Slack id, and a message outside any thread the door opened carries no key.
+//! by a Slack id. A speaker's top-level message opens a thread under a key the door mints, and a
+//! reply in a thread the door does not know carries no key.
 
 use std::collections::BTreeSet;
 use std::fs;
@@ -17,7 +18,8 @@ const DELIVERED_FILE: &str = "delivered.txt";
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum Delivery {
     /// A message by an allowed person. `key` is the thread it replies in, when the door opened
-    /// that thread; a message outside any such thread has no key.
+    /// that thread or minted for a top-level message; a reply in a thread the door does not know
+    /// has no key.
     Message {
         key: Option<String>,
         user: String,
@@ -39,6 +41,12 @@ struct InboxChannel {
     name: String,
     id: String,
     speakers: BTreeSet<String>,
+}
+
+/// The key the door mints for a message with Slack timestamp `ts` (`1700000000.000001`):
+/// `m-1700000000-000001`.
+fn mint_key(ts: &str) -> String {
+    format!("m-{}", ts.replace('.', "-"))
 }
 
 /// The filter between Slack's events and the inbox: only allowed people, in the configured
@@ -102,7 +110,7 @@ impl Inbox {
     pub fn deliver<T: SlackTransport>(
         &mut self,
         event: Event,
-        threads: &Threads<T>,
+        threads: &mut Threads<T>,
     ) -> io::Result<Option<Delivery>> {
         Ok(self.deliver_to(event, threads)?.map(|(_, delivery)| delivery))
     }
@@ -111,13 +119,13 @@ impl Inbox {
     pub fn deliver_to<T: SlackTransport>(
         &mut self,
         event: Event,
-        threads: &Threads<T>,
+        threads: &mut Threads<T>,
     ) -> io::Result<Option<(String, Delivery)>> {
         let event_id = event.id().to_owned();
         if self.delivered.contains(&event_id) {
             return Ok(None);
         }
-        let Some(delivery) = self.decide(event, threads) else {
+        let Some(delivery) = self.decide(event, threads)? else {
             return Ok(None);
         };
         self.remember(&event_id)?;
@@ -127,9 +135,9 @@ impl Inbox {
     fn decide<T: SlackTransport>(
         &self,
         event: Event,
-        threads: &Threads<T>,
-    ) -> Option<(String, Delivery)> {
-        match event {
+        threads: &mut Threads<T>,
+    ) -> io::Result<Option<(String, Delivery)>> {
+        Ok(match event {
             Event::Message {
                 channel,
                 user,
@@ -138,8 +146,18 @@ impl Inbox {
                 text,
                 ..
             } => {
-                let name = self.speaker_channel(&channel, &user)?;
-                let key = thread.as_deref().and_then(|root| threads.key_for(&channel, root));
+                let Some(name) = self.speaker_channel(&channel, &user) else {
+                    return Ok(None);
+                };
+                let key = match thread.as_deref() {
+                    Some(root) => threads.key_for(&channel, root),
+                    // A speaker's top-level message opens a thread under a key minted from its time.
+                    None => {
+                        let key = mint_key(&ts);
+                        threads.adopt(&channel, &key, &ts)?;
+                        Some(key)
+                    }
+                };
                 Some((
                     name,
                     Delivery::Message {
@@ -157,11 +175,12 @@ impl Inbox {
                 name,
                 ..
             } => {
-                let channel_name = self.speaker_channel(&channel, &user)?;
-                let key = threads.key_for(&channel, &message)?;
-                Some((channel_name, Delivery::Reaction { key, user, name }))
+                self.speaker_channel(&channel, &user).and_then(|channel_name| {
+                    let key = threads.key_for(&channel, &message)?;
+                    Some((channel_name, Delivery::Reaction { key, user, name }))
+                })
             }
-        }
+        })
     }
 
     /// The name of the declared channel `channel` (a Slack id) when `user` may be delivered from
@@ -230,9 +249,9 @@ mod tests {
     #[test]
     fn an_allowed_reply_in_a_thread_lands_with_its_key() {
         let dir = scratch("reply");
-        let (threads, root) = with_thread(&dir);
+        let (mut threads, root) = with_thread(&dir);
         let event = reply(CHANNEL, "U1", Some(&root), "Use the fine-grained token");
-        let delivery = inbox(&dir).deliver(event, &threads).unwrap();
+        let delivery = inbox(&dir).deliver(event, &mut threads).unwrap();
         assert_eq!(
             delivery,
             Some(Delivery::Message {
@@ -247,57 +266,109 @@ mod tests {
     #[test]
     fn a_stranger_is_not_delivered() {
         let dir = scratch("stranger");
-        let (threads, root) = with_thread(&dir);
+        let (mut threads, root) = with_thread(&dir);
         let event = reply(CHANNEL, "U9", Some(&root), "Hi");
-        assert_eq!(inbox(&dir).deliver(event, &threads).unwrap(), None);
+        assert_eq!(inbox(&dir).deliver(event, &mut threads).unwrap(), None);
     }
 
     #[test]
     fn the_doors_own_posts_are_not_delivered() {
         let dir = scratch("own");
-        let (threads, root) = with_thread(&dir);
+        let (mut threads, root) = with_thread(&dir);
         let event = reply(CHANNEL, BOT, Some(&root), "Hi");
-        assert_eq!(inbox(&dir).deliver(event, &threads).unwrap(), None);
+        assert_eq!(inbox(&dir).deliver(event, &mut threads).unwrap(), None);
     }
 
     #[test]
     fn a_bot_message_with_no_user_is_not_delivered() {
         let dir = scratch("bot");
-        let (threads, root) = with_thread(&dir);
+        let (mut threads, root) = with_thread(&dir);
         let event = reply(CHANNEL, "", Some(&root), "Hi");
-        assert_eq!(inbox(&dir).deliver(event, &threads).unwrap(), None);
+        assert_eq!(inbox(&dir).deliver(event, &mut threads).unwrap(), None);
     }
 
     #[test]
     fn a_message_in_another_channel_is_not_delivered() {
         let dir = scratch("channel");
-        let (threads, root) = with_thread(&dir);
+        let (mut threads, root) = with_thread(&dir);
         let event = reply("C2", "U1", Some(&root), "Hi");
-        assert_eq!(inbox(&dir).deliver(event, &threads).unwrap(), None);
+        assert_eq!(inbox(&dir).deliver(event, &mut threads).unwrap(), None);
     }
 
     #[test]
-    fn a_top_level_message_lands_with_no_key() {
+    fn a_top_level_message_lands_with_a_minted_key() {
         let dir = scratch("top-level");
-        let (threads, _) = with_thread(&dir);
+        let (mut threads, _) = with_thread(&dir);
         let event = reply(CHANNEL, "U1", None, "What's blocked today?");
-        let delivery = inbox(&dir).deliver(event, &threads).unwrap();
-        assert!(matches!(delivery, Some(Delivery::Message { key: None, .. })));
+        let delivery = inbox(&dir).deliver(event, &mut threads).unwrap();
+        assert!(matches!(
+            delivery,
+            Some(Delivery::Message { key: Some(k), .. }) if k == "m-1700000100-000001"
+        ));
+    }
+
+    #[test]
+    fn writing_to_a_minted_key_replies_under_the_speakers_message() {
+        let (mut inbox, mut threads, _) = two_channels("two-minted");
+        let event = reply("C2", "U2", None, "bug: the save button overlaps the footer");
+        let (channel, delivery) = inbox.deliver_to(event, &mut threads).unwrap().unwrap();
+        assert_eq!(channel, "fixme");
+        let Delivery::Message { key: Some(key), user, text, .. } = delivery else {
+            panic!("expected a message with a key");
+        };
+        assert_eq!((user.as_str(), text.as_str()), ("U2", "bug: the save button overlaps the footer"));
+        threads.write_in(&Grants::all(), "fixme", &key, "Fixed").unwrap();
+        let post = &threads.transport().posts()[1];
+        assert_eq!(post.thread.as_deref(), Some("1700000100.000001"));
+    }
+
+    #[test]
+    fn a_minted_key_survives_a_restart_and_names_the_thread_for_replies() {
+        let dir = scratch("minted-restart");
+        let (mut threads, _) = with_thread(&dir);
+        let event = reply(CHANNEL, "U1", None, "What's blocked today?");
+        inbox(&dir).deliver(event, &mut threads).unwrap();
+        drop(threads);
+
+        let mut threads = Threads::open(&dir, CHANNEL, FakeSlack::new()).unwrap();
+        assert_eq!(threads.key_for(CHANNEL, "1700000100.000001").as_deref(), Some("m-1700000100-000001"));
+        let in_it = Event::Message {
+            id: "Ev2".to_owned(),
+            channel: CHANNEL.to_owned(),
+            user: "U1".to_owned(),
+            ts: "1700000200.000001".to_owned(),
+            thread: Some("1700000100.000001".to_owned()),
+            text: "Also this".to_owned(),
+        };
+        let delivery = inbox(&dir).deliver(in_it, &mut threads).unwrap();
+        assert!(matches!(
+            delivery,
+            Some(Delivery::Message { key: Some(k), .. }) if k == "m-1700000100-000001"
+        ));
+    }
+
+    #[test]
+    fn a_stranger_top_level_message_opens_no_thread() {
+        let dir = scratch("stranger-top");
+        let (mut threads, _) = with_thread(&dir);
+        let event = reply(CHANNEL, "U9", None, "Hi");
+        assert_eq!(inbox(&dir).deliver(event, &mut threads).unwrap(), None);
+        assert_eq!(threads.key_for(CHANNEL, "1700000100.000001"), None);
     }
 
     #[test]
     fn a_reply_in_a_thread_the_door_did_not_open_lands_with_no_key() {
         let dir = scratch("not-ours");
-        let (threads, _) = with_thread(&dir);
+        let (mut threads, _) = with_thread(&dir);
         let event = reply(CHANNEL, "U1", Some("1700000000.999999"), "Hi");
-        let delivery = inbox(&dir).deliver(event, &threads).unwrap();
+        let delivery = inbox(&dir).deliver(event, &mut threads).unwrap();
         assert!(matches!(delivery, Some(Delivery::Message { key: None, .. })));
     }
 
     #[test]
     fn an_allowed_reaction_on_an_opening_message_lands_with_the_key() {
         let dir = scratch("reaction");
-        let (threads, root) = with_thread(&dir);
+        let (mut threads, root) = with_thread(&dir);
         let event = Event::Reaction {
             id: "Ev1".to_owned(),
             channel: CHANNEL.to_owned(),
@@ -306,7 +377,7 @@ mod tests {
             name: "+1".to_owned(),
         };
         assert_eq!(
-            inbox(&dir).deliver(event, &threads).unwrap(),
+            inbox(&dir).deliver(event, &mut threads).unwrap(),
             Some(Delivery::Reaction {
                 key: "carducci-54".to_owned(),
                 user: "U1".to_owned(),
@@ -318,7 +389,7 @@ mod tests {
     #[test]
     fn a_reaction_on_a_message_the_door_did_not_open_is_not_delivered() {
         let dir = scratch("reaction-other");
-        let (threads, _) = with_thread(&dir);
+        let (mut threads, _) = with_thread(&dir);
         let event = Event::Reaction {
             id: "Ev1".to_owned(),
             channel: CHANNEL.to_owned(),
@@ -326,7 +397,7 @@ mod tests {
             message: "1700000000.999999".to_owned(),
             name: "+1".to_owned(),
         };
-        assert_eq!(inbox(&dir).deliver(event, &threads).unwrap(), None);
+        assert_eq!(inbox(&dir).deliver(event, &mut threads).unwrap(), None);
     }
 
     /// Two declared channels: `gonk-chat` (C1, speaker U1) and `fixme` (C2, speaker U2), with the
@@ -348,52 +419,52 @@ mod tests {
 
     #[test]
     fn a_speakers_reply_lands_in_the_inbox_of_its_channel() {
-        let (mut inbox, threads, root) = two_channels("two-reply");
+        let (mut inbox, mut threads,root) = two_channels("two-reply");
         let event = reply("C1", "U1", Some(&root), "Use the fine-grained token");
-        let (channel, delivery) = inbox.deliver_to(event, &threads).unwrap().unwrap();
+        let (channel, delivery) = inbox.deliver_to(event, &mut threads).unwrap().unwrap();
         assert_eq!(channel, "gonk-chat");
         assert!(matches!(delivery, Delivery::Message { key: Some(k), .. } if k == "carducci-54"));
     }
 
     #[test]
     fn a_stranger_is_in_no_inbox() {
-        let (mut inbox, threads, root) = two_channels("two-stranger");
+        let (mut inbox, mut threads,root) = two_channels("two-stranger");
         let event = reply("C1", "U9", Some(&root), "Hi");
-        assert_eq!(inbox.deliver_to(event, &threads).unwrap(), None);
+        assert_eq!(inbox.deliver_to(event, &mut threads).unwrap(), None);
     }
 
     #[test]
     fn the_door_is_in_no_inbox_even_when_listed_as_a_speaker() {
-        let (mut inbox, threads, root) = two_channels("two-own");
+        let (mut inbox, mut threads,root) = two_channels("two-own");
         let event = reply("C1", BOT, Some(&root), "Hi");
-        assert_eq!(inbox.deliver_to(event, &threads).unwrap(), None);
+        assert_eq!(inbox.deliver_to(event, &mut threads).unwrap(), None);
     }
 
     #[test]
     fn a_speaker_of_one_channel_is_in_no_inbox_of_another() {
-        let (mut inbox, threads, root) = two_channels("two-cross");
+        let (mut inbox, mut threads,root) = two_channels("two-cross");
         let event = reply("C1", "U2", Some(&root), "Hi");
-        assert_eq!(inbox.deliver_to(event, &threads).unwrap(), None);
+        assert_eq!(inbox.deliver_to(event, &mut threads).unwrap(), None);
     }
 
     #[test]
     fn an_undeclared_channel_is_in_no_inbox() {
-        let (mut inbox, threads, _) = two_channels("two-undeclared");
+        let (mut inbox, mut threads,_) = two_channels("two-undeclared");
         let event = reply("C3", "U1", None, "Hi");
-        assert_eq!(inbox.deliver_to(event, &threads).unwrap(), None);
+        assert_eq!(inbox.deliver_to(event, &mut threads).unwrap(), None);
     }
 
     #[test]
     fn a_speaker_of_the_other_channel_lands_in_that_channels_inbox() {
-        let (mut inbox, threads, _) = two_channels("two-other");
+        let (mut inbox, mut threads,_) = two_channels("two-other");
         let event = reply("C2", "U2", None, "bug: the save button overlaps the footer");
-        let (channel, _) = inbox.deliver_to(event, &threads).unwrap().unwrap();
+        let (channel, _) = inbox.deliver_to(event, &mut threads).unwrap().unwrap();
         assert_eq!(channel, "fixme");
     }
 
     #[test]
     fn a_speakers_reaction_lands_in_the_inbox_of_its_channel() {
-        let (mut inbox, threads, root) = two_channels("two-reaction");
+        let (mut inbox, mut threads,root) = two_channels("two-reaction");
         let event = Event::Reaction {
             id: "Ev1".to_owned(),
             channel: "C1".to_owned(),
@@ -401,7 +472,7 @@ mod tests {
             message: root,
             name: "+1".to_owned(),
         };
-        let (channel, delivery) = inbox.deliver_to(event, &threads).unwrap().unwrap();
+        let (channel, delivery) = inbox.deliver_to(event, &mut threads).unwrap().unwrap();
         assert_eq!(channel, "gonk-chat");
         assert_eq!(
             delivery,
@@ -416,14 +487,14 @@ mod tests {
     #[test]
     fn a_redelivered_event_is_delivered_once_even_across_a_restart() {
         let dir = scratch("redeliver");
-        let (threads, root) = with_thread(&dir);
+        let (mut threads, root) = with_thread(&dir);
         let event = reply(CHANNEL, "U1", Some(&root), "Which token?");
         let mut before = inbox(&dir);
-        assert!(before.deliver(event.clone(), &threads).unwrap().is_some());
-        assert_eq!(before.deliver(event.clone(), &threads).unwrap(), None);
+        assert!(before.deliver(event.clone(), &mut threads).unwrap().is_some());
+        assert_eq!(before.deliver(event.clone(), &mut threads).unwrap(), None);
         drop(before);
 
         let mut after = inbox(&dir);
-        assert_eq!(after.deliver(event, &threads).unwrap(), None);
+        assert_eq!(after.deliver(event, &mut threads).unwrap(), None);
     }
 }

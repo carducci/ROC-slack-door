@@ -222,6 +222,21 @@ impl<T: SlackTransport> Threads<T> {
             .map(|((_, key), _)| key.clone())
     }
 
+    /// Records the message `ts` in the channel with Slack id `channel` as the opening message of
+    /// the thread `key`, as if the door had posted it, and saves the map. A key already in use in
+    /// that channel is left alone.
+    pub fn adopt(&mut self, channel: &str, key: &str, ts: &str) -> io::Result<()> {
+        if self.threads.contains_key(&slot(channel, key)) {
+            return Ok(());
+        }
+        let thread = Thread {
+            channel: channel.to_owned(),
+            ts: ts.to_owned(),
+        };
+        self.threads.insert(slot(channel, key), thread);
+        self.save()
+    }
+
     /// Whether the key names a thread the door has opened.
     pub fn exists(&self, grants: &Grants, key: &str) -> Result<bool, ThreadError> {
         grants.require(READ).map_err(ThreadError::Refused)?;

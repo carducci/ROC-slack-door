@@ -115,7 +115,7 @@ fn run(config: Config) -> ExitCode {
             let events = threads.transport_mut().take_events();
             events
                 .into_iter()
-                .filter_map(|event| match inbox.deliver_to(event, &*threads) {
+                .filter_map(|event| match inbox.deliver_to(event, &mut *threads) {
                     Ok(delivery) => delivery,
                     Err(e) => {
                         eprintln!("roc-slack-door: the inbox could not record an event: {e}");

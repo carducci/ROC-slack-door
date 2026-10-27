@@ -222,7 +222,7 @@ fn run_step(world: &mut World, step: &Value) -> Result<(), String> {
             for event in events {
                 if let Some(delivery) = world
                     .inbox
-                    .deliver(event, &world.threads)
+                    .deliver(event, &mut world.threads)
                     .map_err(|e| format!("inbox: {e}"))?
                 {
                     deliveries.push(delivery_json(&delivery));
