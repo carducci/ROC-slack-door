@@ -1182,6 +1182,54 @@ class ControlCodeTest(unittest.TestCase):
                     self.enforced_at(where),
                 )
 
+    def test_an_enforced_at_with_nothing_after_its_hash_names_no_function(self) -> None:
+        # ikigai-slack#261: vocabulary.ttl gives `path#function`; `path#` was taken as `path`.
+        for where in (".github/workflows/ci.yml#", "AGENTS.md#", "justfile#"):
+            with self.subTest(where=where):
+                shutil.copy(ROOT / ".gonk/harness/harness.ttl", self.repo / ".gonk/harness/harness.ttl")
+                self.assertEqual(
+                    [f"{CONTROLS}ci-checks: enforcedAt {where}, which names no function after #"],
+                    self.enforced_at(where),
+                )
+
+    def test_a_name_in_a_file_with_no_known_definitions_is_refused(self) -> None:
+        # ikigai-slack#261: in a file neither .py nor a justfile, any substring passed, `x` in
+        # AGENTS.md among them, and `#<module>` passed in any file.
+        for where, path in (
+            ("AGENTS.md#x", "AGENTS.md"),
+            (".github/workflows/ci.yml#jobs", ".github/workflows/ci.yml"),
+            (".github/workflows/ci.yml#<module>", ".github/workflows/ci.yml"),
+        ):
+            with self.subTest(where=where):
+                shutil.copy(ROOT / ".gonk/harness/harness.ttl", self.repo / ".gonk/harness/harness.ttl")
+                self.assertEqual(
+                    [
+                        f"{CONTROLS}ci-checks: enforcedAt {where}, and a name can't be checked in "
+                        f"{path}: name a function of a .py file or a recipe of a justfile, or "
+                        "cite the file alone"
+                    ],
+                    self.enforced_at(where),
+                )
+
+    def test_a_name_only_mentioned_in_a_file_is_not_defined_there(self) -> None:
+        # ikigai-slack#261: a .py name is a def or class the code has, not a line in a string
+        # that reads like one; a recipe is the whole name, not one a longer recipe starts with.
+        (self.repo / ".github/x.py").write_text('"""\ndef ghost():\n"""\n\n\ndef real():\n    pass\n')
+        (self.repo / ".github/justfile").write_text("worker-once:\n    echo\n\n@quiet arg='a:b':\n    echo\n")
+        for where, ok in (
+            (".github/x.py#ghost", False),
+            (".github/x.py#real", True),
+            (".github/x.py#<module>", True),
+            (".github/justfile#worker", False),
+            (".github/justfile#worker-once", True),
+            (".github/justfile#quiet", True),
+        ):
+            with self.subTest(where=where):
+                shutil.copy(ROOT / ".gonk/harness/harness.ttl", self.repo / ".gonk/harness/harness.ttl")
+                path, _, name = where.partition("#")
+                expected = [] if ok else [f"{CONTROLS}ci-checks: enforcedAt {where}, and {path} has no {name}"]
+                self.assertEqual(expected, self.enforced_at(where))
+
     @unittest.skipIf(os.name == "nt", "a mode of 000 stops nothing on Windows")
     @unittest.skipIf(getattr(os, "geteuid", lambda: 1)() == 0, "root reads a mode-000 directory")
     def test_an_enforced_at_under_a_directory_that_cannot_be_searched_cannot_be_read(self) -> None:
