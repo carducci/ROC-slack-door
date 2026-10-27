@@ -130,6 +130,11 @@ impl Config {
             let id = value(&format!("{prefix}_ID")).unwrap_or_default().trim().to_owned();
             if id.is_empty() {
                 problems.push(format!("channel {name} has no id: set {prefix}_ID"));
+            } else if id.chars().any(char::is_control) {
+                problems.push(format!(
+                    "channel {name} has an id with a tab, newline or other control character: \
+                     fix {prefix}_ID"
+                ));
             }
             let speakers: Vec<String> = value(&format!("{prefix}_SPEAKERS"))
                 .unwrap_or_default()
@@ -253,6 +258,18 @@ mod tests {
         assert_eq!(only(refused(&file)), expected);
         let env = |name: &str| (name == "SLACK_CHANNEL_FIXME_ID").then(|| "   ".to_owned());
         assert_eq!(only(Config::resolve(&file_with(""), env).unwrap_err().0), expected);
+    }
+
+    #[test]
+    fn a_channel_id_with_a_control_character_stops_the_start_and_is_named() {
+        let expected = "channel fixme has an id with a tab, newline or other control character: \
+            fix SLACK_CHANNEL_FIXME_ID";
+        let file = parse_file(&format!("{GOOD}SLACK_CHANNEL_FIXME_ID=\"C2\tx\"\n"));
+        assert_eq!(only(refused(&file)), expected);
+        for bad in ["C2\nx", "C2\rx", "C2\u{7f}", " C2\tx \n"] {
+            let env = |name: &str| (name == "SLACK_CHANNEL_FIXME_ID").then(|| bad.to_owned());
+            assert_eq!(only(Config::resolve(&file_with(""), env).unwrap_err().0), expected, "{bad:?}");
+        }
     }
 
     #[test]
