@@ -755,7 +755,7 @@ def check(repo: Path) -> list[str]:
     # has, and quotes that section, word for word. AGENTS.md: every rule heading has a guide.
     root = repo.resolve()
     agents_md = root / "AGENTS.md"
-    read: dict[Path, dict[str, str] | str] = {}
+    read: dict[Path, dict[str, Section] | str] = {}
     cited = set()
     for s in sorted(guides, key=lambda t: t.value):
         for name in g.values(s, H + "statedIn"):
@@ -780,9 +780,17 @@ def check(repo: Path) -> list[str]:
                         f"{s.value}: quotes nothing of {where}; "
                         "quote, in backticks, a phrase the section says"
                     )
-                for quote in quotes:
-                    if flat(quote) not in sections[section]:
-                        bad.append(f"{s.value}: quotes {code_span(quote)}, which {where} does not")
+                unsaid = [q for q in quotes if not sections[section].says(flat(q))]
+                for quote in unsaid:
+                    bad.append(f"{s.value}: quotes {code_span(quote)}, which {where} does not")
+                # The heading's words may be quoted, but only a quote of the body holds the
+                # guide to the rule: a heading stays put while the rule under it drifts.
+                body = sections[section].body
+                if quotes and not unsaid and not any(flat(q) in body for q in quotes):
+                    bad.append(
+                        f"{s.value}: quotes only the heading of {where}; "
+                        "quote, in backticks, a phrase the section says under it"
+                    )
     if agents_md.is_file():
         agents_path = agents_md.resolve()
         if agents_path not in read:
@@ -819,20 +827,32 @@ FENCE = re.compile(r" {0,3}(`{3,}(?=[^`]*$)|~{3,})")
 CODE_SPAN = re.compile(r"(?<!`)(`+)(?!`)(.+?)(?<!`)\1(?!`)", re.S)
 
 
-def read_sections(path: Path) -> dict[str, str] | str:
-    """The `## ` sections of a Markdown file, heading to the section as a reader sees it
-    (`flat`), its heading's words included; or why the file can't be read.
+@dataclass(frozen=True)
+class Section:
+    """A `## ` section as a reader sees it (`flat`): its heading's words, and its body's."""
 
-    A line inside a fenced block is the block's text, never a heading; code spans, links and
-    `**` are read as their words, and every run of white space, a line ending in a code span
-    included (CommonMark 6.1), as one space."""
+    heading: str
+    body: str
+
+    def says(self, words: str) -> bool:
+        """The words are in the section, its heading included."""
+        return words in flat(f"{self.heading} {self.body}")
+
+
+def read_sections(path: Path) -> dict[str, Section] | str:
+    """The `## ` sections of a Markdown file, by heading, each read as a reader sees it; or
+    why the file can't be read.
+
+    A line inside a fenced block is the block's text, never a heading; the text outside one
+    is read by `inline`, and every run of white space, a line ending in a code span included
+    (CommonMark 6.1), as one space."""
     try:
         text = path.read_text(encoding="utf-8")
     except UnicodeDecodeError:
         return "is not UTF-8 text"
     except OSError as e:
         return f"can't be read ({e.strerror})"
-    sections: dict[str, list[str]] = {}
+    sections: dict[str, tuple[str, list[str]]] = {}
     lines: list[str] | None = None
     prose: list[str] = []
     fence = ""
@@ -856,12 +876,12 @@ def read_sections(path: Path) -> dict[str, str] | str:
             fence = m.group(1)
         elif line.startswith("## "):
             close_prose()
-            lines = sections.setdefault(line[3:].strip(), [])
-            prose.append(line[3:])
+            heading = line[3:].strip()
+            lines = sections.setdefault(heading, (inline(heading), []))[1]
         else:
             prose.append(line)
     close_prose()
-    return {heading: flat(" ".join(parts)) for heading, parts in sections.items()}
+    return {h: Section(flat(words), flat(" ".join(body))) for h, (words, body) in sections.items()}
 
 
 def inline(text: str) -> str:
@@ -898,7 +918,7 @@ def quoted(s: I, g: Graph) -> list[str]:
     one phrase of the rule's own text: a command, a flag, a file, or the words that state the
     rule. The check holds each quote to the cited section as a reader sees it (read_sections),
     so a change to either copy of a quoted phrase is a disagreement, and so is a guide that
-    quotes nothing."""
+    quotes nothing, or nothing but the section's heading."""
     return [m for c in g.values(s, RDFS + "comment") for m in re.findall(r"`([^`\n]+)`", c)]
 
 
