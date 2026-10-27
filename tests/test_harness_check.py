@@ -5,6 +5,7 @@ from __future__ import annotations
 
 import builtins
 import contextlib
+import errno
 import importlib.util
 import io
 import os
@@ -12,6 +13,7 @@ import re
 import shutil
 import sys
 import tempfile
+import types
 import unittest
 from collections.abc import Callable
 from pathlib import Path, PureWindowsPath
@@ -213,6 +215,11 @@ class WindowsNamesTest(unittest.TestCase):
         }
         if os.name != "nt":
             makers["shutil.copytree, a name inside"] = lambda: shutil.copytree(at / "tree", at / "t")
+        if hasattr(Path, "copy"):  # Python 3.14
+            makers["Path.copy"] = lambda: (at / "ok").copy(bad)
+            makers["Path.move"] = lambda: (at / "ok").move(bad)
+            if os.name != "nt":
+                makers["Path.copy, a name inside"] = lambda: (at / "tree").copy(at / "t")
         for maker, make in makers.items():
             with self.subTest(maker=maker):
                 try:
@@ -227,6 +234,53 @@ class WindowsNamesTest(unittest.TestCase):
                         (at / "ok").write_text("ok", encoding="utf-8")
                 self.assertEqual([], [p.relative_to(at).as_posix() for p in made])
                 self.assertFalse(moved, "ok was moved")
+
+    @unittest.skipIf(os.name == "nt", "Windows has the real CopyFile2; this models it elsewhere")
+    def test_a_copy_windows_makes_with_copyfile2_is_guarded(self) -> None:
+        # ikigai-slack#245: on Windows, from Python 3.12, shutil.copy2 calls
+        # _winapi.CopyFile2(src, dst, flags) and returns before copyfile or open, so the guard
+        # on open never saw the name. copytree and move copy files with copy2, and from 3.14
+        # Path.copy and Path.move copy with the same CopyFile2 (pathlib._os.copyfile2). Nothing
+        # here runs on Windows, so _winapi is modelled, as shutil sees it: shutil reads
+        # `_winapi.CopyFile2` when copy2 runs, from the module it imported.
+        tmp = tempfile.TemporaryDirectory()
+        self.addCleanup(tmp.cleanup)
+        at = Path(tmp.name)
+        (at / "ok").write_text("ok", encoding="utf-8")
+        (at / "tree").mkdir()
+        Path(f"{at.as_posix()}/tree/a:b").write_text("x", encoding="utf-8")
+        copied: list[str] = []
+        winapi = types.ModuleType("_winapi")
+        winapi.COPY_FILE_ALLOW_DECRYPTED_DESTINATION = 0x8
+        winapi.COPY_FILE_COPY_SYMLINK = 0x800
+        winapi.ERROR_PRIVILEGE_NOT_HELD = 1314
+        winapi.ERROR_ACCESS_DENIED = 5
+
+        def copy_file_2(src: str, dst: str, flags: int, progress_routine=None) -> None:
+            copied.append(dst)  # Windows would make dst here, as a file or an a:b stream
+            shutil.copyfile(src, dst)
+
+        winapi.CopyFile2 = copy_file_2
+        with mock.patch.object(shutil, "_winapi", winapi):
+            make_only_windows_names(self)
+            bad = Path(f"{at.as_posix()}/a:b")
+            makers = {
+                "shutil.copy2": lambda: shutil.copy2(at / "ok", bad),
+                "shutil.copytree, a name inside": lambda: shutil.copytree(at / "tree", at / "t"),
+                "shutil.move, across devices": lambda: shutil.move(at / "ok", bad),
+            }
+            across = OSError(errno.EXDEV, "Invalid cross-device link")  # so move copies with copy2
+            with mock.patch.object(os, "rename", side_effect=across):
+                for maker, make in makers.items():
+                    with self.subTest(maker=maker):
+                        with self.assertRaises(OSError):
+                            make()
+                        self.assertEqual([], copied, "CopyFile2 was called with a name Windows refuses")
+                        self.assertEqual(["ok", "tree"], sorted(p.name for p in at.iterdir() if p.name != "t"))
+                        self.assertEqual([], list(at.glob("t/*")))
+            # A name Windows takes still goes through CopyFile2, so the guard changes nothing else.
+            self.assertEqual(at / "fine", Path(shutil.copy2(at / "ok", at / "fine")))
+            self.assertEqual([str(at / "fine")], copied)
 
 
 class HarnessCheckTest(unittest.TestCase):
