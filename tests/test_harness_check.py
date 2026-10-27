@@ -1203,6 +1203,55 @@ class ControlCodeTest(unittest.TestCase):
         finally:
             locked.chmod(0o755)
 
+    @unittest.skipIf(os.name == "nt", "a mode of 000 stops nothing on Windows")
+    @unittest.skipIf(getattr(os, "geteuid", lambda: 1)() == 0, "root reads a mode-000 file")
+    def test_an_enforced_at_file_with_a_name_that_cannot_be_read_is_said_so(self) -> None:
+        # ikigai-slack#264: repo_file passes a regular file it can't read, and a `#name` makes
+        # the check read it for the name; that read raised PermissionError rather than say so.
+        locked = self.repo / "m000.yml"
+        shutil.copy(self.repo / ".github/workflows/ci.yml", locked)
+        locked.chmod(0)
+        try:
+            where = "m000.yml#main"
+            self.assertEqual(
+                [
+                    f"{CONTROLS}ci-checks: enforcedAt {where}, and m000.yml "
+                    f"can't be read ({os.strerror(errno.EACCES)})"
+                ],
+                self.enforced_at(where),
+            )
+        finally:
+            locked.chmod(0o644)
+
+    @unittest.skipIf(os.name == "nt", "a mode of 000 stops nothing on Windows")
+    @unittest.skipIf(getattr(os, "geteuid", lambda: 1)() == 0, "root reads a mode-000 file")
+    def test_an_enforced_at_code_file_that_cannot_be_read_is_said_so(self) -> None:
+        # ikigai-slack#264: a file under tools/ is read for its emitters too, and that read
+        # raised PermissionError as well. Naming code makes ci-checks a code sensor, so the
+        # problems that follow from that come after.
+        locked = self.repo / "tools/m000.py"
+        locked.write_text("def main():\n    pass\n", encoding="utf-8")
+        locked.chmod(0)
+        try:
+            where = "tools/m000.py#main"
+            reason = f"can't be read ({os.strerror(errno.EACCES)})"
+            self.assertEqual(
+                f"{CONTROLS}ci-checks: enforcedAt {where}, and tools/m000.py {reason}",
+                self.enforced_at(where)[0],
+            )
+            self.assertIn(f"tools/m000.py {reason}", harness.check(self.repo))
+        finally:
+            locked.chmod(0o644)
+
+    def test_an_enforced_at_file_with_a_name_that_is_not_utf8_is_said_so(self) -> None:
+        # ikigai-slack#264: the same read raised UnicodeDecodeError; a statedIn says this.
+        (self.repo / "binary.yml").write_bytes(b"main: \xff\xfe\n")
+        where = "binary.yml#main"
+        self.assertEqual(
+            [f"{CONTROLS}ci-checks: enforcedAt {where}, and binary.yml is not UTF-8 text"],
+            self.enforced_at(where),
+        )
+
 
 if __name__ == "__main__":
     unittest.main()
