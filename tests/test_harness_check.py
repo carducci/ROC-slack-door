@@ -3,6 +3,7 @@ and a guide and the AGENTS.md section it cites agree on the words they quote."""
 
 from __future__ import annotations
 
+import builtins
 import contextlib
 import importlib.util
 import io
@@ -12,6 +13,7 @@ import shutil
 import sys
 import tempfile
 import unittest
+from collections.abc import Callable
 from pathlib import Path, PureWindowsPath
 from unittest import mock
 
@@ -29,9 +31,16 @@ WINDOWS_RESERVED = {"CON", "PRN", "AUX", "NUL"} | {
 }
 
 
-def windows_refuses(path: str | Path) -> str | None:
-    """The first part of `path` that Windows can't name a file or directory, or None."""
-    path = Path(path)
+def windows_refuses(path: str | bytes | os.PathLike) -> str | None:
+    """The first part of `path` that Windows can't name a file or directory, or None. `path` is
+    read as Windows reads it, on every platform. A drive (`C:`) counts as one only at the head
+    of a path that is absolute here: a drive with nothing after it but a name is what joining
+    an `x:` part makes on Windows (`Path("/tmp") / "x:"` is `x:`), and here `x:/…` would name
+    a directory `x:` (ikigai-slack#239)."""
+    text = os.fsdecode(path)
+    path = PureWindowsPath(text)
+    if path.drive and not (path.root and Path(text).is_absolute()):
+        return path.drive
     for part in path.parts[1:] if path.anchor else path.parts:
         if part in (".", ".."):
             continue
@@ -45,40 +54,61 @@ def windows_refuses(path: str | Path) -> str | None:
 
 
 def make_only_windows_names(test: unittest.TestCase) -> None:
-    """For the rest of `test`, refuse to make a file or directory Windows can't name, as
-    Windows would, so a test that makes one fails here too (ikigai-slack#237)."""
+    """For the rest of `test`, refuse to make a file, directory or link Windows can't name, as
+    Windows would, so a test that makes one fails here too (ikigai-slack#237).
 
-    def guard(make, made_at: int):
-        # made_at: which argument names what is made (Path's self, or shutil's destination).
-        def made(*args, **kwargs):
-            target = args[made_at]
-            part = windows_refuses(target)
-            if part is not None:
-                raise OSError(f"Windows can't name {part!r}, in {target}")
+    It guards the calls Python makes a name through (ikigai-slack#240): `open` and `io.open`
+    in a mode that can create (w, x or a), `os.open` with O_CREAT, `os.mkdir`, `os.symlink`,
+    `os.link`, `os.rename` and `os.replace`. Through them it guards Path's mkdir, touch, open,
+    write_text, write_bytes, symlink_to, hardlink_to, rename and replace, `os.makedirs`,
+    shutil's copy, copy2, copyfile, move and copytree (every name copytree makes), and
+    tempfile. It does not guard os.mknod, os.mkfifo, or a name a subprocess makes."""
+
+    def guard(make, made: Callable[[tuple, dict], object]):
+        # made: what the call makes, or None when it makes nothing.
+        def guarded(*args, **kwargs):
+            target = made(args, kwargs)
+            if target is not None and not isinstance(target, int):
+                part = windows_refuses(target)
+                if part is not None:
+                    raise OSError(f"Windows can't name {part!r}, in {os.fsdecode(target)}")
             return make(*args, **kwargs)
 
-        return made
+        return guarded
 
-    for owner, name, made_at in (
-        (Path, "mkdir", 0),
-        (Path, "write_text", 0),
-        (Path, "write_bytes", 0),
-        (Path, "symlink_to", 0),
-        (shutil, "copy", 1),
-        (shutil, "copytree", 1),
+    def arg(args: tuple, kwargs: dict, at: int, name: str, default=None):
+        return args[at] if len(args) > at else kwargs.get(name, default)
+
+    def opened(args: tuple, kwargs: dict):
+        creates = any(c in "wxa" for c in arg(args, kwargs, 1, "mode", "r"))
+        return arg(args, kwargs, 0, "file") if creates else None
+
+    def os_opened(args: tuple, kwargs: dict):
+        creates = arg(args, kwargs, 1, "flags", 0) & os.O_CREAT
+        return arg(args, kwargs, 0, "path") if creates else None
+
+    for owner, name, made in (
+        (builtins, "open", opened),
+        (io, "open", opened),
+        (os, "open", os_opened),
+        (os, "mkdir", lambda args, kwargs: arg(args, kwargs, 0, "path")),
+        *((os, name, lambda args, kwargs: arg(args, kwargs, 1, "dst"))
+          for name in ("symlink", "link", "rename", "replace")),
     ):
-        patcher = mock.patch.object(owner, name, guard(getattr(owner, name), made_at))
+        patcher = mock.patch.object(owner, name, guard(getattr(owner, name), made))
         patcher.start()
         test.addCleanup(patcher.stop)
 
 
 def absolute_paths(outside: Path, inside: Path, name: str) -> tuple[str, str, str]:
     """Absolute paths a test writes as a statedIn or an enforcedAt, spelled with /: `name` in
-    `outside`/x, `inside` itself, and `name` under a directory `x:` of `outside`."""
+    `outside`/x, `inside` itself, and `name` under a directory `x:` of `outside`. The last is
+    built as a string: joined as a Path, Windows reads `x:` as a drive and drops `outside`
+    (ikigai-slack#239)."""
     return (
         (outside / "x" / name).as_posix(),
         inside.as_posix(),
-        (outside / "x:" / name).as_posix(),
+        f"{outside.as_posix()}/x:/{name}",
     )
 
 
@@ -91,7 +121,8 @@ class WindowsNamesTest(unittest.TestCase):
             *("CON", "nul.txt", "com1", "LPT9.md"),
         ):
             with self.subTest(part=part):
-                self.assertEqual(part, windows_refuses(Path("/tmp") / part / "ci.yml"))
+                # A string, not a join: Windows joins `x:` as a drive (ikigai-slack#239).
+                self.assertEqual(part, windows_refuses(Path(f"/tmp/{part}/ci.yml")))
 
     def test_a_name_windows_takes_is_taken(self) -> None:
         for path in (
@@ -105,9 +136,11 @@ class WindowsNamesTest(unittest.TestCase):
         tmp = tempfile.TemporaryDirectory()
         self.addCleanup(tmp.cleanup)
         make_only_windows_names(self)
+        # A string, not a join: on Windows `Path(tmp.name) / "x:"` is drive X: (ikigai-slack#239).
+        bad = Path(f"{Path(tmp.name).as_posix()}/x:")
         with self.assertRaises(OSError):
-            (Path(tmp.name) / "x:").mkdir()
-        self.assertFalse((Path(tmp.name) / "x:").exists())
+            bad.mkdir()
+        self.assertFalse(bad.exists())
         (Path(tmp.name) / "x").mkdir()
         self.assertTrue((Path(tmp.name) / "x").is_dir())
 
@@ -133,7 +166,8 @@ class WindowsNamesTest(unittest.TestCase):
             with self.subTest(path=path):
                 self.assertTrue(path.startswith("C:/Users/me/AppData/Local/Temp/tmp1/"))
                 self.assertTrue(PureWindowsPath(path).is_absolute())
-        self.assertEqual("x:", windows_refuses(paths[2]))
+        with mock.patch.object(sys.modules[__name__], "Path", PureWindowsPath):
+            self.assertEqual("x:", windows_refuses(paths[2]))
 
     def test_every_way_a_test_makes_a_name_is_guarded(self) -> None:
         # ikigai-slack#240: each of these made `a:b` here with no error, so a test that made
@@ -144,9 +178,12 @@ class WindowsNamesTest(unittest.TestCase):
         (at / "ok").write_text("ok", encoding="utf-8")
         (at / "tree").mkdir()
         if os.name != "nt":  # Windows can't hold a bad name in a tree to copy, so has none to guard
-            (at / "tree" / "a:b").write_text("x", encoding="utf-8")
+            Path(f"{at.as_posix()}/tree/a:b").write_text("x", encoding="utf-8")
         make_only_windows_names(self)
-        bad = at / "a:b"
+        # A string, not a join: on Windows `at / "a:b"` is `b` on drive A: (ikigai-slack#239).
+        bad = Path(f"{at.as_posix()}/a:b")
+        with mock.patch.object(sys.modules[__name__], "Path", PureWindowsPath):
+            self.assertEqual("a:b", windows_refuses("C:/Users/me/tmp1/a:b"))
         makers = {
             "Path.mkdir": lambda: bad.mkdir(),
             "Path.touch": lambda: bad.touch(),
