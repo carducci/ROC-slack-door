@@ -56,11 +56,13 @@ import argparse
 import ast
 import hashlib
 import html
+import html.entities
 import os
 import re
 import secrets
 import sys
 import time
+import unicodedata
 from dataclasses import dataclass, field
 from pathlib import Path
 
@@ -884,44 +886,147 @@ def read_sections(path: Path) -> dict[str, Section] | str:
     return {h: Section(flat(words), flat(" ".join(body))) for h, (words, body) in sections.items()}
 
 
+# CommonMark's inline forms (spec 0.31.2, chapter 6), as `inline` reads them.
 PUNCTUATION = set("!\"#$%&'()*+,-./:;<=>?@[\\]^_`{|}~")
-# An inline link or image, `[text](destination "title")`: the title in "", '' or ().
-LINK = re.compile(
-    r"!?\[([^\]\n]*)\]\(\s*(?:<[^<>\n]*>|[^\s()<]*)"
-    r"""(?:\s+(?:"[^"]*"|'[^']*'|\([^()]*\)))?\s*\)"""
+AUTOLINK = re.compile(
+    r"<([A-Za-z][A-Za-z0-9+.-]{1,31}:[^<>\x00-\x20]*"
+    r"|[A-Za-z0-9.!#$%&'*+/=?^_`{|}~-]+@[A-Za-z0-9](?:[A-Za-z0-9-]{0,61}[A-Za-z0-9])?"
+    r"(?:\.[A-Za-z0-9](?:[A-Za-z0-9-]{0,61}[A-Za-z0-9])?)*)>"
 )
-AUTOLINK = re.compile(r"<([A-Za-z][A-Za-z0-9+.-]{1,31}:[^<>\s]*|[^<>\s@]+@[^<>\s@]+)>")
-# Emphasis, a run of one to three `*` or `_` closed by the same run in the same paragraph:
-# `_` not inside a word.
-_IN_PARAGRAPH = r"((?:(?!\n[ \t]*\n).)+?)"
-EMPHASIS = (
-    re.compile(rf"(?<!\*)(\*{{1,3}})(?=[^\s*]){_IN_PARAGRAPH}(?<=[^\s*])\1(?!\*)", re.S),
-    re.compile(rf"(?<![\w_])(_{{1,3}})(?=[^\s_]){_IN_PARAGRAPH}(?<=[^\s_])\1(?![\w_])", re.S),
+_ATTRIBUTE = r"""\s+[A-Za-z_:][A-Za-z0-9_.:-]*(?:\s*=\s*(?:[^\s"'=<>`]+|'[^']*'|"[^"]*"))?"""
+RAW_HTML = re.compile(
+    rf"<[A-Za-z][A-Za-z0-9-]*(?:{_ATTRIBUTE})*\s*/?>|</[A-Za-z][A-Za-z0-9-]*\s*>"
+    r"|<!-->|<!--->|<!--.*?-->|<\?.*?\?>|<![A-Za-z][^>]*>|<!\[CDATA\[.*?\]\]>",
+    re.S,
 )
-ENTITY = re.compile(r"&(?:#[0-9]{1,7}|#[xX][0-9A-Fa-f]{1,6}|[A-Za-z][A-Za-z0-9]{1,31});")
+ENTITY = re.compile(r"&(?:#([0-9]{1,7})|#[xX]([0-9A-Fa-f]{1,6})|([A-Za-z][A-Za-z0-9]{1,31}));")
+# Spaces or tabs with at most one line ending, between a link's parts; and a link title.
+_LINK_SPACE = re.compile(r"[ \t]*(?:\n[ \t]*)?")
+_LINK_TITLE = re.compile(r'"(?:[^"\\]|\\.)*"|\'(?:[^\'\\]|\\.)*\'|\((?:[^()\\]|\\.)*\)', re.S)
+_ANGLE_DESTINATION = re.compile(r"<(?:[^<>\n\\]|\\[^\n])*>")
 
 
-def inline(text: str) -> str:
-    """Markdown text as its words, which is what a reader sees of these forms and no others:
-    a code span is its content, its line endings spaces; a backslash escape is the character
-    it escapes, and a backslash ending a line a space; an inline link or image, with or
-    without a title, is its text; an autolink is its address; `*` and `_` emphasis, one to
-    three deep, are their words; an entity is its character. Code spans come first, and keep
-    escapes and entities as they are; an entity's character is never read as Markdown."""
-    held: list[str] = []
+@dataclass(eq=False)
+class _Run:
+    """A delimiter run of `*` or `_` (CommonMark 6.2): what it can do, and what is left of it."""
 
-    def hold(s: str) -> str:
-        held.append(s)
-        return chr(0xF0000 + len(held) - 1)  # a private-use character: no Markdown, no word
+    char: str
+    length: int
+    opens: bool
+    closes: bool
+    left: int
+    live: bool = True  # still on the delimiter stack
 
-    out, pos = [], 0
+
+@dataclass(eq=False)
+class _Bracket:
+    """A `[` or `![` on the bracket stack (CommonMark 6.3), and the runs before it."""
+
+    image: bool
+    runs: int
+    active: bool = True
+    link: bool = False
+
+
+def _whitespace(c: str) -> bool:
+    return c == "" or c in "\t\n\f\r" or unicodedata.category(c) == "Zs"
+
+
+def _punctuation(c: str) -> bool:
+    return c != "" and (c in PUNCTUATION or unicodedata.category(c)[0] in "PS")
+
+
+def _entity(m: re.Match[str]) -> str | None:
+    """An entity or numeric character reference's character, or None for no such entity."""
+    decimal, hexadecimal, name = m.groups()
+    if name is not None:
+        return html.entities.html5.get(name + ";")
+    n = int(decimal) if decimal is not None else int(hexadecimal, 16)
+    return chr(n) if 0 < n <= 0x10FFFF and not 0xD800 <= n <= 0xDFFF else "�"
+
+
+def _link_end(text: str, pos: int) -> int | None:
+    """Where an inline link's `(destination "title")`, starting at pos, ends; or None when
+    there is none (CommonMark 6.3: a destination's parentheses balance unless escaped)."""
+    if text[pos : pos + 1] != "(":
+        return None
+    pos = _LINK_SPACE.match(text, pos + 1).end()
+    if text[pos : pos + 1] == "<":
+        m = _ANGLE_DESTINATION.match(text, pos)
+        if not m:
+            return None
+        pos = m.end()
+    else:
+        depth = 0
+        while pos < len(text):
+            c = text[pos]
+            if c == "\\" and text[pos + 1 : pos + 2] in PUNCTUATION:
+                pos += 2
+                continue
+            if c <= " " or c == "\x7f" or (c == ")" and not depth):
+                break
+            depth += {"(": 1, ")": -1}.get(c, 0)
+            pos += 1
+        if depth:
+            return None
+    gap = _LINK_SPACE.match(text, pos).end()
+    title = _LINK_TITLE.match(text, gap) if gap > pos else None
+    pos = _LINK_SPACE.match(text, title.end()).end() if title else gap
+    return pos + 1 if text[pos : pos + 1] == ")" else None
+
+
+def _emphasis(runs: list[_Run], bottom: int) -> None:
+    """CommonMark's "process emphasis" over runs[bottom:]: each closer takes the nearest opener
+    it may pair with, two of each run when both have two, so `**a*` is `*` and an `a` emphasized.
+    What pairs with nothing stays as text."""
+    floor: dict[tuple[str, bool, int], int] = {}
+    i = bottom
+    while i < len(runs):
+        closer = runs[i]
+        if not (closer.live and closer.closes):
+            i += 1
+            continue
+        key = (closer.char, closer.opens, closer.length % 3)
+        j = i - 1
+        while j >= floor.get(key, bottom):
+            opener = runs[j]
+            if opener.live and opener.opens and opener.char == closer.char:
+                either = opener.closes or closer.opens
+                total = opener.length + closer.length
+                if not (either and total % 3 == 0 and (opener.length % 3 or closer.length % 3)):
+                    break
+            j -= 1
+        if j < floor.get(key, bottom):
+            floor[key] = i
+            closer.live = closer.opens
+            i += 1
+            continue
+        used = 2 if opener.left >= 2 and closer.left >= 2 else 1
+        opener.left -= used
+        closer.left -= used
+        for run in runs[j + 1 : i]:
+            run.live = False
+        opener.live = opener.left > 0
+        if not closer.left:
+            closer.live = False
+            i += 1
+    for run in runs[bottom:]:
+        run.live = False
+
+
+def _paragraph(text: str, unread: set[str]) -> str:
+    """One paragraph's inline Markdown as its words, read left to right as CommonMark does."""
+    nodes: list[str | _Run | _Bracket] = []
+    runs: list[_Run] = []
+    brackets: list[_Bracket] = []
+    pos = 0
     while pos < len(text):
-        c = text[pos]
-        if c == "\\" and text[pos + 1 : pos + 2] in PUNCTUATION:
-            out.append(hold(text[pos + 1]))
+        c, after = text[pos], text[pos + 1 : pos + 2]
+        if c == "\\" and after in PUNCTUATION:
+            nodes.append(after)
             pos += 2
-        elif c == "\\" and text[pos + 1 : pos + 2] == "\n":
-            out.append(" ")
+        elif c == "\\" and after == "\n":
+            nodes.append(" ")
             pos += 2
         elif c == "`":
             ticks = re.match(r"`+", text[pos:]).group()
@@ -930,23 +1035,98 @@ def inline(text: str) -> str:
                 code = text[pos + len(ticks) : close.start()].replace("\n", " ")
                 if code.startswith(" ") and code.endswith(" ") and code.strip():
                     code = code[1:-1]
-                out.append(hold(code))
+                nodes.append(code)
                 pos = close.end()
             else:
-                out.append(ticks)
+                nodes.append(ticks)
                 pos += len(ticks)
+        elif c == "<" and (m := AUTOLINK.match(text, pos)):
+            nodes.append(m.group(1))
+            pos = m.end()
+        elif c == "<" and (m := RAW_HTML.match(text, pos)):
+            unread.add("raw HTML")
+            nodes.append(m.group())
+            pos = m.end()
+        elif c == "&" and (m := ENTITY.match(text, pos)) and (char := _entity(m)) is not None:
+            nodes.append(char)
+            pos = m.end()
+        elif c in "*_":
+            end = pos
+            while text[end : end + 1] == c:
+                end += 1
+            before, after = text[pos - 1 : pos], text[end : end + 1]
+            left = not _whitespace(after) and (
+                not _punctuation(after) or _whitespace(before) or _punctuation(before)
+            )
+            right = not _whitespace(before) and (
+                not _punctuation(before) or _whitespace(after) or _punctuation(after)
+            )
+            if c == "*":
+                opens, closes = left, right
+            else:
+                opens = left and (not right or _punctuation(before))
+                closes = right and (not left or _punctuation(after))
+            run = _Run(c, end - pos, opens, closes, end - pos)
+            nodes.append(run)
+            runs.append(run)
+            pos = end
+        elif c == "[" or (c == "!" and after == "["):
+            bracket = _Bracket(c == "!", len(runs))
+            nodes.append(bracket)
+            brackets.append(bracket)
+            pos += 2 if c == "!" else 1
+        elif c == "]" and brackets:
+            opener = brackets.pop()
+            end = _link_end(text, pos + 1) if opener.active else None
+            if end is None:
+                nodes.append("]")
+                pos += 1
+                continue
+            _emphasis(runs, opener.runs)
+            opener.link = True
+            if not opener.image:
+                for bracket in brackets:  # no link inside a link
+                    bracket.active = False
+            pos = end
         else:
-            out.append(c)
+            nodes.append(c)
             pos += 1
-    words = LINK.sub(r"\1", "".join(out))
-    words = AUTOLINK.sub(r"\1", words)
-    for emphasis in EMPHASIS:
-        while True:
-            words, n = emphasis.subn(r"\2", words)
-            if not n:
-                break
-    words = ENTITY.sub(lambda m: hold(html.unescape(m.group())), words)
-    return re.sub("[\U000f0000-\U000ffffd]", lambda m: held[ord(m.group()) - 0xF0000], words)
+    _emphasis(runs, 0)
+    words = []
+    for node in nodes:
+        if isinstance(node, _Run):
+            words.append(node.char * node.left)
+        elif isinstance(node, _Bracket):
+            words.append("" if node.link else "![" if node.image else "[")
+        else:
+            words.append(node)
+    return "".join(words)
+
+
+def inline(text: str, unread: set[str] | None = None) -> str:
+    """Markdown text as the words a reader sees, read paragraph by paragraph (a paragraph ends
+    at a blank line) by CommonMark's own inline algorithm (spec 0.31.2, chapter 6), left to
+    right:
+
+    - a code span is its content, its line endings spaces and one padding space stripped from
+      each side; nothing in it is read as Markdown;
+    - a backslash escape of ASCII punctuation is that character, and a backslash ending a line
+      a space;
+    - an autolink (`<scheme:…>`, `<a@b.c>`) is its address, as written: no escape and no
+      emphasis inside it is read;
+    - an entity or numeric character reference is its character (an unknown name is its text,
+      and code point 0 or one that is not a character is U+FFFD), never read as Markdown;
+    - `*` and `_` delimiter runs pair as CommonMark 6.2 says (flanking, the rule of three, the
+      nearest opener first), and a pair is its words; a run left unpaired is its characters;
+    - an inline link or image, `[text](destination "title")`, is its text: the destination may
+      be `<…>` or hold balanced or escaped parentheses, the title is `"…"`, `'…'` or `(…)`, and
+      there is no link inside a link's text.
+
+    Not read: raw HTML is kept as written, a `[text]` with no `(…)` after it is its
+    characters (a reference link is not resolved), and block structure is not read here.
+    Raw HTML met in the text is added to `unread` when it is given."""
+    unread = set() if unread is None else unread
+    return "\n\n".join(_paragraph(p, unread) for p in re.split(r"\n[ \t]*\n", text))
 
 
 def flat(text: str) -> str:
