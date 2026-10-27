@@ -559,3 +559,26 @@ ctl:edit-hook-unreadable-input a harness:Control ;
     harness:wiredBy "claude:require-claim" ;
     harness:statedBy guide:claim-before-write ;
     harness:firedBy test:test_harness:SensorsFire.test_edit_hook_unreadable_input .
+
+# ── design-resource-first (AGENTS.md "Design resource-first")
+
+guide:resource-first-pass a harness:Guide ;
+    rdfs:label "design resource-first: names first, code last" ;
+    rdfs:comment "Before designing or briefing a new app, module, endpoint family or feature, do the resource-first pass and write the result under `## Resource map` in the change's proposal.md, or in the pull request when there is no spec." ;
+    harness:statedIn "AGENTS.md" ; harness:section "Design resource-first" ;
+    harness:direction harness:feedforward ; harness:execution harness:inferential ;
+    harness:stage harness:toolCall ; harness:category harness:architectureFitness .
+
+guide:resource-map-form-by-class a harness:Guide ;
+    rdfs:label "the repository's class sets the map's form" ;
+    rdfs:comment "`roc` and `dogfood`: a map, as `docs/resource-design.md` shows; a fix or maintenance: `Not needed:` and the reason; `legacy`: nothing, it carries no such section; a repository with no class: the pass is optional." ;
+    harness:statedIn "AGENTS.md" ; harness:section "Design resource-first" ;
+    harness:direction harness:feedforward ; harness:execution harness:inferential ;
+    harness:stage harness:toolCall ; harness:category harness:architectureFitness .
+
+guide:kernel-wall-is-a-finding a harness:Guide ;
+    rdfs:label "a kernel wall is a finding" ;
+    rdfs:comment "A design that hits a wall in the kernel is a finding: say so in the report rather than coding around it." ;
+    harness:statedIn "AGENTS.md" ; harness:section "Design resource-first" ;
+    harness:direction harness:feedforward ; harness:execution harness:inferential ;
+    harness:stage harness:toolCall ; harness:category harness:behavior .
