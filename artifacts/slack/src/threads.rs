@@ -169,8 +169,19 @@ impl<T: SlackTransport> Threads<T> {
                 channel: channel.to_owned(),
                 ts,
             };
-            self.threads.insert(slot(channel, key), thread);
-            self.save().map_err(ThreadError::State)?;
+            self.record(key, thread).map_err(ThreadError::State)?;
+        }
+        Ok(())
+    }
+
+    /// Records `thread` under `key` in its channel and saves the map. The entry is kept only once
+    /// the map is saved: a save that fails leaves the map, in memory and on disk, as it was.
+    fn record(&mut self, key: &str, thread: Thread) -> io::Result<()> {
+        let slot = slot(&thread.channel, key);
+        self.threads.insert(slot.clone(), thread);
+        if let Err(error) = self.save() {
+            self.threads.remove(&slot);
+            return Err(error);
         }
         Ok(())
     }
@@ -242,11 +253,7 @@ impl<T: SlackTransport> Threads<T> {
             channel: channel.to_owned(),
             ts: ts.to_owned(),
         };
-        self.threads.insert(slot(channel, key), thread);
-        if let Err(error) = self.save() {
-            self.threads.remove(&slot(channel, key));
-            return Err(error);
-        }
+        self.record(key, thread)?;
         Ok(true)
     }
 
@@ -667,6 +674,27 @@ mod tests {
         let after = Threads::open(&dir, "C1", FakeSlack::new()).unwrap();
         assert!(after.exists(&all(), "other").unwrap());
         assert!(!after.exists(&all(), "carducci-54").unwrap());
+    }
+
+    #[test]
+    fn a_thread_whose_save_failed_is_not_kept_and_a_retry_opens_it() {
+        let dir = scratch("save-fails");
+        let mut threads = Threads::open(&dir, "C1", FakeSlack::new()).unwrap();
+        let blocker = dir.join("threads.tsv.tmp");
+        fs::create_dir(&blocker).unwrap();
+        let err = threads.write(&all(), "carducci-54", "Opening").unwrap_err();
+        assert!(matches!(err, ThreadError::State(_)), "{err:?}");
+        assert!(!threads.exists(&all(), "carducci-54").unwrap());
+        assert!(!dir.join(MAP_FILE).exists());
+
+        fs::remove_dir(&blocker).unwrap();
+        threads.write(&all(), "carducci-54", "Opening again").unwrap();
+        assert!(threads.exists(&all(), "carducci-54").unwrap());
+        // A new top-level message, not a reply in a thread the map never held.
+        assert_eq!(threads.transport().posts()[1].thread, None);
+        drop(threads);
+        let after = Threads::open(&dir, "C1", FakeSlack::new()).unwrap();
+        assert!(after.exists(&all(), "carducci-54").unwrap());
     }
 
     #[test]
