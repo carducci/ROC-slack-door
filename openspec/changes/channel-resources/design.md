@@ -77,8 +77,11 @@ kept.
 ## Fitness functions
 
 - The spec-and-vector agreement test (already in CI) fails if any scenario here has no vector.
-- A test that no source file under `artifacts/` contains `urn:slack:thread:` or
-  `urn:cap:slack:read` / `post` / `react` without `channel`, so the old names can't come back.
+- A test in `tests/`, run by `python3 scripts/test.py` and written by task 4.1, that fails if
+  any file under `artifacts/` contains `urn:slack:thread:` (the old thread and reaction names,
+  bound without a channel) or one of the global capabilities `urn:cap:slack:read`,
+  `urn:cap:slack:post`, `urn:cap:slack:react`, so the old names can't come back. The scoped
+  `urn:cap:slack:channel:{name}:read` has `channel:` between and never matches.
 
 ## Open
 

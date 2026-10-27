@@ -20,7 +20,7 @@
 
 ## 4. Capabilities (`slack`)
 
-- [ ] 4.1 Require `urn:cap:slack:channel:{name}:{read,post,react}` on every verb, including the inbox, and remove the global capabilities (Capabilities gate the verbs)
+- [ ] 4.1 Require `urn:cap:slack:channel:{name}:{read,post,react}` on every verb, including the inbox; remove the global capabilities `urn:cap:slack:{read,post,react}` (`artifacts/slack/src/lib.rs`) and the old bindings `urn:slack:thread:{key}` and `urn:slack:thread:{key}:reaction:{name}` (`artifacts/door/src/serve.rs`), with their `Meta` entries and tests; and write design.md's second fitness function as a test in `tests/`, run by `python3 scripts/test.py`, that fails if any file under `artifacts/` contains `urn:slack:thread:` or one of `urn:cap:slack:read`, `urn:cap:slack:post`, `urn:cap:slack:react` (Capabilities gate the verbs)
 
 ## 5. Vectors, docs and deploy
 
