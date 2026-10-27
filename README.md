@@ -25,11 +25,14 @@ written against them can move to another chat system by swapping the door undern
 Three capabilities gate the verbs: `urn:cap:slack:read`, `urn:cap:slack:post`, and
 `urn:cap:slack:react`. A host can let one caller read and another post.
 
-The specs say exactly what each resource does:
-[threads](openspec/specs/threads/spec.md),
-[reactions](openspec/specs/reactions/spec.md),
-[inbox](openspec/specs/inbox/spec.md), and
-[configuration](openspec/specs/configuration/spec.md).
+The specs say exactly what each resource does. While the
+[`channel-resources`](openspec/changes/channel-resources/proposal.md) change is in flight they are its deltas:
+[threads](openspec/changes/channel-resources/specs/threads/spec.md),
+[reactions](openspec/changes/channel-resources/specs/reactions/spec.md),
+[inbox](openspec/changes/channel-resources/specs/inbox/spec.md), and
+[configuration](openspec/changes/channel-resources/specs/configuration/spec.md).
+Once it is archived (task 5.3) they are the same four under `openspec/specs/`.
+The older `urn:slack:thread:{key}` names are still bound beside the channel ones.
 
 ## Two pieces
 
