@@ -723,9 +723,10 @@ def check(repo: Path) -> list[str]:
             if not is_local(where):
                 continue
             path, _, name = where.partition("#")
-            if not (repo / path).is_file():
-                bad.append(f"{s.value}: enforcedAt {where}, and {path} is not in this repository")
-            elif name and not defined_in(repo / path, name):
+            file, why = stated_file(repo.resolve(), path)
+            if file is None:
+                bad.append(f"{s.value}: enforcedAt {where}, and {path} {why}")
+            elif name and not defined_in(file, name):
                 bad.append(f"{s.value}: enforcedAt {where}, and {path} has no {name}")
         if fires_into_log(g, s) and not g.values(s, H + "firedBy"):
             bad.append(
