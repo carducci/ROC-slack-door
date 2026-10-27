@@ -220,6 +220,15 @@ pub fn check_key(key: &str) -> Result<&str, Refusal> {
     }
 }
 
+/// Whether `ts` has the shape Slack's timestamps have: digits, one dot, digits.
+pub(crate) fn is_slack_ts(ts: &str) -> bool {
+    ts.split_once('.').is_some_and(|(seconds, micros)| {
+        [seconds, micros]
+            .iter()
+            .all(|part| !part.is_empty() && part.bytes().all(|b| b.is_ascii_digit()))
+    })
+}
+
 /// What a resource is, for a caller that asks. A description holds no secret.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct Meta {
@@ -274,6 +283,7 @@ pub struct FakeSlack {
     reactions: BTreeSet<(String, String)>,
     events: Vec<Event>,
     failures: VecDeque<TransportError>,
+    answers: VecDeque<String>,
 }
 
 impl FakeSlack {
@@ -284,6 +294,12 @@ impl FakeSlack {
     /// Makes the next call to the transport fail with `error`, as Slack would answer it.
     pub fn fail_next(&mut self, error: TransportError) {
         self.failures.push_back(error);
+    }
+
+    /// Makes the next post answer `ts` as the new message's timestamp, whatever its shape, as a
+    /// Slack that answered something other than digits, a dot, digits would.
+    pub fn answer_next_post(&mut self, ts: &str) {
+        self.answers.push_back(ts.to_owned());
     }
 
     fn next_failure(&mut self) -> Result<(), TransportError> {
@@ -347,7 +363,10 @@ impl SlackTransport for FakeSlack {
         text: &str,
     ) -> Result<String, TransportError> {
         self.next_failure()?;
-        let ts = format!("1700000000.{:06}", self.history.len() + 1);
+        let ts = self
+            .answers
+            .pop_front()
+            .unwrap_or_else(|| format!("1700000000.{:06}", self.history.len() + 1));
         self.history.push(Stored {
             channel: channel.to_owned(),
             thread: thread.map(str::to_owned),
@@ -410,6 +429,15 @@ mod tests {
         assert_eq!(slack.posts().len(), 1);
         assert_eq!(slack.posts()[0].ts, ts);
         assert_eq!(slack.posts()[0].thread, None);
+    }
+
+    #[test]
+    fn a_post_answers_the_timestamp_the_test_chose_then_mints_its_own_again() {
+        let mut slack = FakeSlack::new();
+        slack.answer_next_post("not-a-timestamp");
+        assert_eq!(slack.post("C1", None, "Opening").unwrap(), "not-a-timestamp");
+        assert_eq!(slack.posts()[0].ts, "not-a-timestamp");
+        assert!(is_slack_ts(&slack.post("C1", None, "Again").unwrap()));
     }
 
     #[test]
