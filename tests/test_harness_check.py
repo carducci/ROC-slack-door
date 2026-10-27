@@ -812,6 +812,28 @@ class GuideTextTest(unittest.TestCase):
                     self.problems("ask-dax-continue-draft"),
                 )
 
+    def test_a_refused_symlink_skips_only_its_own_case(self) -> None:
+        # ikigai-slack#241: Windows without Developer Mode or administrator rights refuses a
+        # symlink with WinError 1314, and the case that needs one errored. Nothing here runs on
+        # Windows, so model the refusal: that case skips with its reason, and the rest still run.
+        def refuse(link: Path, target, target_is_directory: bool = False) -> None:
+            error = OSError(errno.EINVAL, "A required privilege is not held by the client",
+                            os.fspath(target), 1314, os.fspath(link))
+            if not hasattr(error, "winerror"):  # only Windows keeps the fourth argument
+                error.winerror = 1314
+            raise error
+
+        case = GuideTextTest("test_a_stated_in_path_outside_the_repository_fails")
+        result = unittest.TestResult()
+        with mock.patch.object(Path, "symlink_to", refuse):
+            case.run(result)
+        self.assertEqual(([], []), (result.errors, result.failures))
+        self.assertEqual(1, len(result.skipped), result.skipped)
+        skipped, reason = result.skipped[0]
+        self.assertIn("name='out'", skipped.id())
+        self.assertIn("refuses a symlink", reason)
+        self.assertIn("1314", reason)
+
     def test_an_absolute_stated_in_path_is_not_relative_to_the_repository(self) -> None:
         # ikigai-slack#197: refused whether it names a file outside the repository or inside.
         (self.outside / "x").mkdir()
