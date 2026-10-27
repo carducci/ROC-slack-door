@@ -175,7 +175,8 @@ impl<T: SlackTransport> Threads<T> {
     }
 
     /// Records `thread` under `key` in its channel and saves the map. The entry is kept only once
-    /// the map is saved: a save that fails leaves the map, in memory and on disk, as it was.
+    /// the map is saved: a save that fails leaves the map, in memory and on disk, as it was,
+    /// a thread the slot already held included.
     fn record(&mut self, key: &str, thread: Thread) -> io::Result<()> {
         let slot = slot(&thread.channel, key);
         let held = self.threads.insert(slot.clone(), thread);
