@@ -622,7 +622,15 @@ def emissions(repo: Path) -> tuple[list[tuple[str, str, str]], list[str]]:
     for top in CODE_ROOTS:
         for path in sorted((repo / top).rglob("*.py")):
             rel = path.relative_to(repo).as_posix()
-            tree = ast.parse(path.read_text(encoding="utf-8"), rel)
+            try:
+                text = path.read_text(encoding="utf-8")
+            except UnicodeDecodeError:
+                bad.append(f"{rel} is not UTF-8 text")
+                continue
+            except OSError as e:
+                bad.append(f"{rel} can't be read ({e.strerror})")
+                continue
+            tree = ast.parse(text, rel)
             found_here, bad_here = _emitters_in(tree, rel)
             found += found_here
             bad += bad_here
@@ -655,16 +663,25 @@ def _emitters_in(tree: ast.AST, rel: str):
     return found, bad
 
 
-def defined_in(path: Path, name: str) -> bool:
+def undefined_in(path: Path, name: str) -> str | None:
+    """None when `name` is defined in `path`, else why not: it has no such name, or it can't be
+    read, worded as read_sections words it (ikigai-slack#264)."""
     if name == "<module>":
-        return True
-    text = path.read_text(encoding="utf-8")
+        return None
+    try:
+        text = path.read_text(encoding="utf-8")
+    except UnicodeDecodeError:
+        return "is not UTF-8 text"
+    except OSError as e:
+        return f"can't be read ({e.strerror})"
     if path.suffix == ".py":
         pattern = rf"^\s*(?:async\s+)?(?:def|class)\s+{re.escape(name)}\b"
-        return re.search(pattern, text, re.M) is not None
-    if path.name == "justfile":
-        return re.search(rf"^{re.escape(name)}\b[^:=\n]*:(?!=)", text, re.M) is not None
-    return name in text
+        found = re.search(pattern, text, re.M) is not None
+    elif path.name == "justfile":
+        found = re.search(rf"^{re.escape(name)}\b[^:=\n]*:(?!=)", text, re.M) is not None
+    else:
+        found = name in text
+    return None if found else f"has no {name}"
 
 
 def check(repo: Path) -> list[str]:
@@ -737,8 +754,8 @@ def check(repo: Path) -> list[str]:
                 # An empty path is seen only quoted, and named as what it is (ikigai-slack#234).
                 cited, named = (repr(where), "its path") if not path else (where, path)
                 bad.append(f"{s.value}: enforcedAt {cited}, and {named} {why}")
-            elif name and not defined_in(file, name):
-                bad.append(f"{s.value}: enforcedAt {where}, and {path} has no {name}")
+            elif name and (why := undefined_in(file, name)):
+                bad.append(f"{s.value}: enforcedAt {where}, and {path} {why}")
         if fires_into_log(g, s) and not g.values(s, H + "firedBy"):
             bad.append(
                 f"{s.value}: a sensor that writes firings names a test that fires it "
