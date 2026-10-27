@@ -783,13 +783,26 @@ def check(repo: Path) -> list[str]:
                         f"{s.value}: quotes nothing of {where}; "
                         "quote, in backticks, a phrase the section says"
                     )
-                unsaid = [q for q in quotes if not sections[section].says(flat(q))]
+                said = sections[section]
+                unsaid = [q for q in quotes if not said.says(flat(q))]
                 for quote in unsaid:
-                    bad.append(f"{s.value}: quotes {code_span(quote)}, which {where} does not")
+                    if said.spans(flat(quote)):
+                        bad.append(
+                            f"{s.value}: quotes {code_span(quote)}, which runs from the heading "
+                            f"of {where} into its body; quote, in backticks, a phrase of one or "
+                            "the other"
+                        )
+                    elif said.unread:
+                        bad.append(
+                            f"{s.value}: quotes {code_span(quote)}, which the check can't find "
+                            f"in {where}: {' and '.join(said.unread)}, which the check does "
+                            "not read"
+                        )
+                    else:
+                        bad.append(f"{s.value}: quotes {code_span(quote)}, which {where} does not")
                 # The heading's words may be quoted, but only a quote of the body holds the
                 # guide to the rule: a heading stays put while the rule under it drifts.
-                body = sections[section].body
-                if quotes and not unsaid and not any(flat(q) in body for q in quotes):
+                if quotes and not unsaid and not any(flat(q) in said.body for q in quotes):
                     bad.append(
                         f"{s.value}: quotes only the heading of {where}; "
                         "quote, in backticks, a phrase the section says under it"
@@ -827,6 +840,9 @@ def stated_file(root: Path, name: str) -> tuple[Path | None, str]:
 # A fence opens with three or more of one character; a backtick fence's info string holds no
 # backtick (CommonMark 4.5), so a line opening with a ``` code span opens none.
 FENCE = re.compile(r" {0,3}(`{3,}(?=[^`]*$)|~{3,})")
+# A link reference definition opens a paragraph (CommonMark 4.7); a setext underline ends one.
+DEFINITION = re.compile(r" {0,3}\[(?:[^\]\\]|\\.)+\]:")
+SETEXT = re.compile(r" {0,3}(?:=+|-+)[ \t]*$")
 
 
 @dataclass(frozen=True)
@@ -835,10 +851,16 @@ class Section:
 
     heading: str
     body: str
+    unread: tuple[str, ...] = ()  # the forms in it that the check does not read, as clauses
 
     def says(self, words: str) -> bool:
-        """The words are in the section, its heading included."""
-        return words in flat(f"{self.heading} {self.body}")
+        """The words are in the section's heading, or in its body: a phrase running from one
+        into the other is not one a reader sees."""
+        return words in self.heading or words in self.body
+
+    def spans(self, words: str) -> bool:
+        """The words run from the heading into the body."""
+        return not self.says(words) and words in f"{self.heading} {self.body}"
 
 
 def read_sections(path: Path) -> dict[str, Section] | str:
@@ -847,21 +869,26 @@ def read_sections(path: Path) -> dict[str, Section] | str:
 
     A line inside a fenced block is the block's text, never a heading; the text outside one
     is read by `inline`, and every run of white space, a line ending in a code span included
-    (CommonMark 6.1), as one space."""
+    (CommonMark 6.1), as one space. A section notes the forms it holds that are not read:
+    raw HTML, a line of only `=` or `-` under a line of text (a setext heading, which a
+    `## ` section may not end at), and, in every section, the file's link reference
+    definitions (a reference link is not resolved)."""
     try:
         text = path.read_text(encoding="utf-8")
     except UnicodeDecodeError:
         return "is not UTF-8 text"
     except OSError as e:
         return f"can't be read ({e.strerror})"
-    sections: dict[str, tuple[str, list[str]]] = {}
+    sections: dict[str, tuple[str, list[str], set[str]]] = {}
     lines: list[str] | None = None
+    unread: set[str] = set()
     prose: list[str] = []
     fence = ""
+    defines = False
 
     def close_prose() -> None:
         if lines is not None and prose:
-            lines.append(inline("\n".join(prose)))
+            lines.append(inline("\n".join(prose), unread))
         prose.clear()
 
     for line in text.splitlines():
@@ -879,11 +906,31 @@ def read_sections(path: Path) -> dict[str, Section] | str:
         elif line.startswith("## "):
             close_prose()
             heading = line[3:].strip()
-            lines = sections.setdefault(heading, (inline(heading), []))[1]
+            if heading not in sections:
+                found: set[str] = set()
+                sections[heading] = (inline(heading, found), [], found)
+            _, lines, unread = sections[heading]
         else:
+            starts = not prose or not prose[-1].strip()
+            if starts and DEFINITION.match(line):
+                defines = True
+            elif not starts and SETEXT.match(line):
+                unread.add("setext")
             prose.append(line)
     close_prose()
-    return {h: Section(flat(words), flat(" ".join(body))) for h, (words, body) in sections.items()}
+    clauses = {
+        "raw HTML": "the section has raw HTML",
+        "setext": "the section has a line of only `=` or `-` under a line of text",
+    }
+    return {
+        h: Section(
+            flat(words),
+            flat(" ".join(body)),
+            tuple(clauses[form] for form in clauses if form in found)
+            + (("the file has a link reference definition",) if defines else ()),
+        )
+        for h, (words, body, found) in sections.items()
+    }
 
 
 # CommonMark's inline forms (spec 0.31.2, chapter 6), as `inline` reads them.
