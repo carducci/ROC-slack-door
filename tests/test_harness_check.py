@@ -619,10 +619,9 @@ class GuideTextTest(unittest.TestCase):
         # ikigai-slack#197: refused whether it names a file outside the repository or inside.
         (self.outside / "x").mkdir()
         shutil.copy(self.repo / "AGENTS.md", self.outside / "x" / "RULES.md")
-        (self.outside / "x:").mkdir()
-        shutil.copy(self.repo / "AGENTS.md", self.outside / "x:" / "RULES.md")
         # ikigai-slack#235: a drive letter, a URL or any colon is not relative either, on every
-        # platform, and a path is written with / so it is one on every platform.
+        # platform, and a path is written with / so it is one on every platform. A colon is
+        # refused from the string alone, so `x:` is never made: Windows can't (ikigai-slack#237).
         for name in (
             (self.outside / "x" / "RULES.md").as_posix(),
             (self.repo / "AGENTS.md").as_posix(),
@@ -718,9 +717,8 @@ class ControlCodeTest(unittest.TestCase):
     def test_an_absolute_enforced_at_path_is_not_relative_to_the_repository(self) -> None:
         # Refused whether it names a file outside the repository or inside, as statedIn is, and
         # however it is spelled: a drive letter, a URL or any colon that is not `owner/repo:`
-        # (ikigai-slack#235). A path is written with / so it is one on every platform.
-        (self.outside / "x:").mkdir()
-        shutil.copy(self.outside / "x" / "ci.yml", self.outside / "x:" / "ci.yml")
+        # (ikigai-slack#235). A path is written with / so it is one on every platform. A colon is
+        # refused from the string alone, so `x:` is never made: Windows can't (ikigai-slack#237).
         for where in (
             (self.outside / "x" / "ci.yml").as_posix(),
             (self.repo / ".github/workflows/ci.yml").as_posix(),
