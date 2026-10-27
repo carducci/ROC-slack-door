@@ -178,9 +178,12 @@ impl<T: SlackTransport> Threads<T> {
     /// the map is saved: a save that fails leaves the map, in memory and on disk, as it was.
     fn record(&mut self, key: &str, thread: Thread) -> io::Result<()> {
         let slot = slot(&thread.channel, key);
-        self.threads.insert(slot.clone(), thread);
+        let held = self.threads.insert(slot.clone(), thread);
         if let Err(error) = self.save() {
-            self.threads.remove(&slot);
+            match held {
+                Some(held) => self.threads.insert(slot, held),
+                None => self.threads.remove(&slot),
+            };
             return Err(error);
         }
         Ok(())
