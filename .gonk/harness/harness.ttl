@@ -366,7 +366,7 @@ guide:ask-dax-question-format a harness:Guide ;
 
 guide:ask-dax-continue-draft a harness:Guide ;
     rdfs:label "continue a draft pull request" ;
-    rdfs:comment "When the dispatcher's notes say `Continue draft PR #N`, merge that draft's branch into yours first and begin the new draft's description with `Supersedes PR #N`." ;
+    rdfs:comment "When the dispatcher's notes say `Continue draft PR #N`, merge that draft's branch into yours first, with the subject `<risk> m Merge <draft branch> (ledger item <your item>)`, and begin the new draft's description with `Supersedes PR #N`." ;
     harness:statedIn "AGENTS.md" ; harness:section "Ask Dax, don't guess" ;
     harness:direction harness:feedforward ; harness:execution harness:inferential ;
     harness:stage harness:runtime ; harness:category harness:authoritySafety .

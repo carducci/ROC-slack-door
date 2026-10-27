@@ -90,9 +90,14 @@ Never make a change only because the item expected one.
     risky (some known risk unchecked), `@` broken (a savepoint; may not build).
   - Intention, exactly one per commit. Uppercase changes one behavior, lowercase none: `F`
     feature, `B` bugfix, `r` refactoring, `d` documentation, and the extensions `e`
-    environment and tooling, `t` tests only, `s` spec. Never `@ @`.
+    environment and tooling, `t` tests only, `s` spec, `m` merge, whose risk is the worst of
+    the commits it merges (upstream's Extension Intentions page). Never `@ @`.
   - One intention per commit, as small as builds and passes; commit after every green step.
     Choose the risk from what was verified, not hoped: no test run, no `^`.
+  - The one exception is a merge commit GitHub writes, merging a pull request or updating its
+    branch from main: it keeps GitHub's subject, and the pull request's own commits carry the
+    notation. A merge commit you write, such as a worker's draft merge in step 3 of "Ask Dax,
+    don't guess", uses `m`.
 
 ## 5. Report with evidence; the dispatcher closes
 
@@ -129,9 +134,10 @@ stop for what reading the repository, its openspec/ or this file settles.
    description. Give one question, what you found that raised it, and the options you see, with
    the one you would pick. Write the draft's URL on the first line of your report, then
    `Question for Dax:` and the question. Then stop. Don't guess, and don't widen the task.
-3. If the dispatcher's notes say `Continue draft PR #N`, start by merging its branch into yours
-   (`git fetch origin <its branch>`, then `git merge -m ". r Merge <branch> (ledger item N)"
-   FETCH_HEAD`, so the merge commit's summary keeps rule 4's notation), and begin your new
+3. If the dispatcher's notes say `Continue draft PR #N`, start by merging its branch into yours:
+   `git fetch origin <draft branch>`, then, on one line,
+   `git merge -m "<risk> m Merge <draft branch> (ledger item <your item>)" FETCH_HEAD`
+   with `<risk>` the worst of the draft's commits, as rule 4 says of `m`. Begin your new
    draft's description with `Supersedes PR #N`.
 
 ## Specs, artifacts, queries and scripts
@@ -190,11 +196,11 @@ items the dispatcher marks for them, and work each one in a fresh working tree o
   once an hour, the worker runs the `[usage] command` of `.gonk/worker*.toml` for its agent
   (`tools/worker_usage.py`; Claude Code, Codex and Hermes alike, each loop its own). The command
   prints a JSON reading (plan, used, limit, percent, reset time); with none, or one that fails,
-  the reading is `unknown`, never a guess. The report line (`Usage: agent=… plan=… used=…
-  limit=… percent=… resets=… read=…`) is logged and posted as a comment on the standing
-  `status_item`, with no token or account id. Above `threshold` percent (default 85) the loop
-  takes no NEW item for that agent, and says so, until a reading is under it or its reset time
-  has passed; an item already running is not stopped.
+  the reading is `unknown`, never a guess. The report line
+  (`Usage: agent=… plan=… used=… limit=… percent=… resets=… read=…`) is logged and posted as a
+  comment on the standing `status_item`, with no token or account id. Above `threshold` percent
+  (default 85) the loop takes no NEW item for that agent, and says so, until a reading is under
+  it or its reset time has passed; an item already running is not stopped.
 - **One agent per repository.** A worker takes no item whose repository already has a live
   claim held by anyone, and runs one item per repository on its machine.
 
