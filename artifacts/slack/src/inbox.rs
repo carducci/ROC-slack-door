@@ -19,7 +19,8 @@ const DELIVERED_FILE: &str = "delivered.txt";
 pub enum Delivery {
     /// A message by an allowed person. `key` is the thread it replies in, when the door opened
     /// that thread or minted for a top-level message; a reply in a thread the door does not know
-    /// has no key.
+    /// has no key, and neither has a top-level message whose key could not be minted safely (its
+    /// timestamp is not Slack-shaped, or the key names another message).
     Message {
         key: Option<String>,
         user: String,
@@ -112,7 +113,8 @@ impl Inbox {
 
     /// Decides what, if anything, an event delivers. A redelivery of an event already delivered
     /// delivers nothing. `threads` says which thread an event's timestamp opens, so a reply in a
-    /// thread the door opened carries its key.
+    /// thread the door opened carries its key; a speaker's top-level message is recorded in it, and
+    /// saved, as a new thread.
     ///
     /// The id is recorded before the delivery is returned: a crash after this point loses the
     /// delivery rather than repeating it, which is the at-most-once the spec asks for.
