@@ -1132,8 +1132,8 @@ def _paragraph(text: str, unread: set[str]) -> str:
             _emphasis(runs, opener.runs)
             opener.link = True
             if not opener.image:
-                for bracket in brackets:  # no link inside a link
-                    bracket.active = False
+                for bracket in brackets:  # no link inside a link; an image may hold one
+                    bracket.active = bracket.active and bracket.image
             pos = end
         else:
             nodes.append(c)
@@ -1167,10 +1167,11 @@ def inline(text: str, unread: set[str] | None = None) -> str:
       nearest opener first), and a pair is its words; a run left unpaired is its characters;
     - an inline link or image, `[text](destination "title")`, is its text: the destination may
       be `<…>` or hold balanced or escaped parentheses, the title is `"…"`, `'…'` or `(…)`, and
-      there is no link inside a link's text.
+      there is no link inside a link's text, though an image's text may hold one.
 
     Not read: raw HTML is kept as written, a `[text]` with no `(…)` after it is its
-    characters (a reference link is not resolved), and block structure is not read here.
+    characters (a reference link is not resolved), and block structure is not read here
+    (`read_sections` reads it).
     Raw HTML met in the text is added to `unread` when it is given."""
     unread = set() if unread is None else unread
     return "\n\n".join(_paragraph(p, unread) for p in re.split(r"\n[ \t]*\n", text))
