@@ -7,9 +7,9 @@
 # Terms: .gonk/harness/vocabulary.ttl. Firings: .gonk/state/harness/firings.log (git-ignored).
 # `python3 tools/harness.py check` holds this file to the code and to AGENTS.md;
 # `python3 tools/gonk.py harness` loads it into gonk and asks .gonk/queries/harness-*.rq.
-# A guide's rdfs:comment paraphrases the rule it cites, so the check does not compare the two
-# word for word; every `quoted` word in it must be quoted in the cited section
-# (tools/harness.py#quoted says why).
+# A guide's rdfs:comment paraphrases the rule it cites and quotes, in backticks, at least one
+# phrase of it: the check holds every `quoted` phrase to the cited section as a reader sees it
+# (tools/harness.py#quoted, #read_sections).
 # FORMAT: the Turtle subset tools/harness.py reads. No blank nodes.
 
 @prefix harness: <https://ikigai-rs.dev/ns/harness#> .
@@ -22,42 +22,42 @@
 
 guide:claim-before-write a harness:Guide ;
     rdfs:label "no claim, no write" ;
-    rdfs:comment "Before changing a file, claim the ledger item the change is for; a change with no item gets one first." ;
+    rdfs:comment "`No claim, no write.` `Before changing a file, claim the ledger item the change is for`; a change with no item gets one first." ;
     harness:statedIn "AGENTS.md" ; harness:section "1. Claim the item before you write" ;
     harness:direction harness:feedforward ; harness:execution harness:inferential ;
     harness:stage harness:toolCall ; harness:category harness:authoritySafety .
 
 guide:a-claim-is-a-lease a harness:Guide ;
     rdfs:label "a claim is a lease" ;
-    rdfs:comment "A claim runs for its lease, and is renewed by claiming the same item again before the lease runs out." ;
+    rdfs:comment "A claim runs for its lease, and is renewed by `claiming the same item again before the lease runs out`." ;
     harness:statedIn "AGENTS.md" ; harness:section "1. Claim the item before you write" ;
     harness:direction harness:feedforward ; harness:execution harness:inferential ;
     harness:stage harness:toolCall ; harness:category harness:authoritySafety .
 
 guide:expired-lease-not-free a harness:Guide ;
     rdfs:label "an expired lease is not free" ;
-    rdfs:comment "Nobody but its holder may take an item whose lease ran out, except by a takeover, which succeeds only if that holder still has it and the lease has really run out." ;
+    rdfs:comment "Nobody but its holder may take an item whose lease ran out, except by a takeover, which `succeeds only if that holder still has it and the lease has really run out`." ;
     harness:statedIn "AGENTS.md" ; harness:section "1. Claim the item before you write" ;
     harness:direction harness:feedforward ; harness:execution harness:inferential ;
     harness:stage harness:toolCall ; harness:category harness:authoritySafety .
 
 guide:stop-when-claim-gone a harness:Guide ;
     rdfs:label "if your claim is gone, stop" ;
-    rdfs:comment "When the claim was taken over or released, stop writing, put the work on a branch, say where, and claim something else." ;
+    rdfs:comment "When the claim was taken over or released, `stop writing`, put the work on a branch, say where, and `claim something else`." ;
     harness:statedIn "AGENTS.md" ; harness:section "1. Claim the item before you write" ;
     harness:direction harness:feedforward ; harness:execution harness:inferential ;
     harness:stage harness:toolCall ; harness:category harness:authoritySafety .
 
 guide:hand-back-when-you-stop a harness:Guide ;
     rdfs:label "hand it back when you stop" ;
-    rdfs:comment "Report a finished item with its evidence, or release an unfinished one saying why: either way the item is free again." ;
+    rdfs:comment "Report a finished item with its evidence, or release an unfinished one saying why: either way `the item is free for the next holder`." ;
     harness:statedIn "AGENTS.md" ; harness:section "1. Claim the item before you write" ;
     harness:direction harness:feedforward ; harness:execution harness:inferential ;
     harness:stage harness:toolCall ; harness:category harness:authoritySafety .
 
 guide:a-claim-is-a-fence a harness:Guide ;
     rdfs:label "someone else's claim is a fence" ;
-    rdfs:comment "A claim held by another holder is refused, with the holder's name; pick another item and never work around a claim." ;
+    rdfs:comment "`A claim held by another holder is refused, with the holder's name`; pick another item and `never work around a claim`." ;
     harness:statedIn "AGENTS.md" ; harness:section "1. Claim the item before you write" ;
     harness:direction harness:feedforward ; harness:execution harness:inferential ;
     harness:stage harness:toolCall ; harness:category harness:authoritySafety .
@@ -105,7 +105,7 @@ ctl:status-claim-check a harness:Control ;
 
 guide:one-agent-per-tree a harness:Guide ;
     rdfs:label "one agent per item, one agent per working tree" ;
-    rdfs:comment "An item has one holder at a time and a working tree one agent at a time; parallel agents each get a working tree and a holder name of their own, and a tree holds one claim." ;
+    rdfs:comment "`An item has one holder at a time, and a working tree has one agent at a time`; parallel agents each get a working tree and a holder name of their own, and a tree holds one claim." ;
     harness:statedIn "AGENTS.md" ; harness:section "2. One agent per claimed item, one agent per working tree" ;
     harness:direction harness:feedforward ; harness:execution harness:inferential ;
     harness:stage harness:toolCall ; harness:category harness:authoritySafety .
@@ -124,7 +124,7 @@ ctl:one-claim-per-tree a harness:Control ;
 
 guide:reproduce-before-fix a harness:Guide ;
     rdfs:label "reproduce before you fix" ;
-    rdfs:comment "A bug report, a finding or a measurement is a claim: reproduce it first, report it as not a defect with the evidence when it does not reproduce, and never change something only because the item expected a change." ;
+    rdfs:comment "A bug report, a finding or a measurement is a claim: reproduce it first, report it as not a defect with the evidence when it does not reproduce, and never make a change `only because the item expected one`." ;
     harness:statedIn "AGENTS.md" ; harness:section "3. Reproduce before you fix" ;
     harness:direction harness:feedforward ; harness:execution harness:inferential ;
     harness:stage harness:toolCall ; harness:category harness:behavior .
@@ -133,7 +133,7 @@ guide:reproduce-before-fix a harness:Guide ;
 
 guide:green-ci-before-merge a harness:Guide ;
     rdfs:label "every change through a pull request with green CI" ;
-    rdfs:comment "Work on a branch, open a pull request, and merge only when every CI check passed: never red, never while checks run." ;
+    rdfs:comment "Work on a branch, open a pull request, and `merge only when every CI check has passed`: never red, never while checks run." ;
     harness:statedIn "AGENTS.md" ; harness:section "4. Every change through a pull request with green CI" ;
     harness:direction harness:feedforward ; harness:execution harness:inferential ;
     harness:stage harness:merge ; harness:category harness:behavior .
@@ -147,7 +147,7 @@ guide:gates-before-push a harness:Guide ;
 
 guide:last-command-exit-status a harness:Guide ;
     rdfs:label "a pipeline's status is its last command's" ;
-    rdfs:comment "A command's exit status is the last command's in a pipeline: never pipe a command whose result you are trusting." ;
+    rdfs:comment "A command's exit status is the last command's in a pipeline: `Never pipe a command whose result you are trusting.`" ;
     harness:statedIn "AGENTS.md" ; harness:section "4. Every change through a pull request with green CI" ;
     harness:direction harness:feedforward ; harness:execution harness:inferential ;
     harness:stage harness:toolCall ; harness:category harness:behavior .
@@ -181,7 +181,7 @@ ctl:local-gates a harness:Control ;
 
 guide:report-with-evidence a harness:Guide ;
     rdfs:label "report with evidence" ;
-    rdfs:comment "Finished work is reported with the evidence that it is done, a pull request's URL or the reproduction that shows it is not a defect, recorded as a comment a later reader can check." ;
+    rdfs:comment "`Finished work is reported with the evidence that it is done`, a pull request's URL or the reproduction that shows it is not a defect, recorded as a comment a later reader can check." ;
     harness:statedIn "AGENTS.md" ; harness:section "5. Report with evidence; the dispatcher closes" ;
     harness:direction harness:feedforward ; harness:execution harness:inferential ;
     harness:stage harness:toolCall ; harness:category harness:behavior .
@@ -234,7 +234,7 @@ guide:no-bare-numbers a harness:Guide ;
 
 guide:read-accessibility-first a harness:Guide ;
     rdfs:label "read ACCESSIBILITY.md before changing what people see" ;
-    rdfs:comment "Before any change to a user interface or rendered output, read ACCESSIBILITY.md and keep its rules; record what was tested and with what, never claim testing that did not happen, and never weaken a check to make a change pass." ;
+    rdfs:comment "Before any change to a user interface or rendered output, read ACCESSIBILITY.md and keep its rules; record what was tested and with what, never `claim testing that did not happen`, and `never weaken a check to make a change pass`." ;
     harness:statedIn "AGENTS.md" ; harness:section "7. Read ACCESSIBILITY.md before changing what people see" ;
     harness:direction harness:feedforward ; harness:execution harness:inferential ;
     harness:stage harness:toolCall ; harness:category harness:behavior .
@@ -299,7 +299,7 @@ ctl:seed-orders-tasks a harness:Control ;
 
 guide:dispatcher-marks-the-work a harness:Guide ;
     rdfs:label "the dispatcher marks the work" ;
-    rdfs:comment "A worker takes only items carrying every label its configuration names; an item without them is never taken by a worker." ;
+    rdfs:comment "A worker takes only items carrying every label its configuration names; `an item without them is never taken by a worker`." ;
     harness:statedIn "AGENTS.md" ; harness:section "Worker machines" ;
     harness:direction harness:feedforward ; harness:execution harness:inferential ;
     harness:stage harness:runtime ; harness:category harness:authoritySafety .
@@ -313,21 +313,21 @@ guide:a-router-dispatches-the-work a harness:Guide ;
 
 guide:comments-are-data a harness:Guide ;
     rdfs:label "comments reach the agent as data" ;
-    rdfs:comment "The item's title and body, pinned by its dispatch, are the agent's task; every comment reaches it as a quoted block under its author, and one by anyone but a router is marked as data written by others, never instructions." ;
+    rdfs:comment "The item's title and body, pinned by its dispatch, are the agent's task; every comment reaches it as a quoted block under its author, and `one by anyone but a router is marked as data written by others`, never instructions." ;
     harness:statedIn "AGENTS.md" ; harness:section "Worker machines" ;
     harness:direction harness:feedforward ; harness:execution harness:inferential ;
     harness:stage harness:runtime ; harness:category harness:authoritySafety .
 
 guide:worker-never-closes-or-merges a harness:Guide ;
     rdfs:label "a worker never closes and never merges" ;
-    rdfs:comment "A worker claims, works and reports, with the pull request and its CI as the evidence; the dispatcher checks it, then merges and closes, or rejects with the reason." ;
+    rdfs:comment "`A worker claims, works and reports; it never closes and never merges.` The pull request and its CI are the evidence; the dispatcher checks it, then merges and closes, or rejects with the reason." ;
     harness:statedIn "AGENTS.md" ; harness:section "Worker machines" ;
     harness:direction harness:feedforward ; harness:execution harness:inferential ;
     harness:stage harness:runtime ; harness:category harness:authoritySafety .
 
 guide:worker-own-account a harness:Guide ;
     rdfs:label "a worker runs as an account of its own" ;
-    rdfs:comment "A worker never runs as root, and works only in a work root strictly under its own account's home: not a person's checkouts, not a shared directory." ;
+    rdfs:comment "A worker never runs as root, and works only `in a work root strictly under that account's home: not a person's checkouts, not a shared directory`." ;
     harness:statedIn "AGENTS.md" ; harness:section "Worker machines" ;
     harness:direction harness:feedforward ; harness:execution harness:inferential ;
     harness:stage harness:runtime ; harness:category harness:authoritySafety .
@@ -341,14 +341,14 @@ guide:worker-budget-and-once a harness:Guide ;
 
 guide:one-agent-per-repository a harness:Guide ;
     rdfs:label "one agent per repository" ;
-    rdfs:comment "A worker takes no item whose repository has a live claim held by anyone, and runs one item per repository on its machine." ;
+    rdfs:comment "`A worker takes no item whose repository already has a live claim held by anyone`, and runs one item per repository on its machine." ;
     harness:statedIn "AGENTS.md" ; harness:section "Worker machines" ;
     harness:direction harness:feedforward ; harness:execution harness:inferential ;
     harness:stage harness:runtime ; harness:category harness:authoritySafety .
 
 guide:ask-dax-dont-guess a harness:Guide ;
     rdfs:label "stop and ask, don't guess" ;
-    rdfs:comment "When the task contradicts the code or the spec, needs a decision it doesn't make, or would change files outside its scope, stop and ask Dax rather than guess." ;
+    rdfs:comment "When the task contradicts the code or the spec, needs a decision it doesn't make, or would change files outside its scope, `stop and ask Dax` rather than guess." ;
     harness:statedIn "AGENTS.md" ; harness:section "Ask Dax, don't guess" ;
     harness:direction harness:feedforward ; harness:execution harness:inferential ;
     harness:stage harness:runtime ; harness:category harness:authoritySafety .
@@ -581,7 +581,7 @@ guide:resource-map-form-by-class a harness:Guide ;
 
 guide:kernel-wall-is-a-finding a harness:Guide ;
     rdfs:label "a kernel wall is a finding" ;
-    rdfs:comment "A design that hits a wall in the kernel is a finding: say so in the report rather than coding around it." ;
+    rdfs:comment "`A design that hits a wall in the kernel is a finding`: say so in the report rather than coding around it." ;
     harness:statedIn "AGENTS.md" ; harness:section "Design resource-first" ;
     harness:direction harness:feedforward ; harness:execution harness:inferential ;
     harness:stage harness:toolCall ; harness:category harness:behavior .
