@@ -431,6 +431,90 @@ class GuideTextTest(unittest.TestCase):
                     self.problems("ask-dax-dont-guess"),
                 )
 
+    def test_an_image_may_hold_a_link(self) -> None:
+        # ikigai-slack#217: a link deactivates only the `[` openers before it, not `![`
+        # (CommonMark 6.3), so an image's text may hold a link.
+        for markdown, words in [
+            ("![a [b](c)](d)", "a b"),
+            ("![[[foo](uri1)](uri2)](uri3)", "[foo](uri2)"),
+            ("[a ![b](c) d](e)", "a b d"),
+        ]:
+            with self.subTest(markdown=markdown):
+                self.assertEqual(words, harness.flat(harness.inline(markdown)))
+        self.edit(
+            "AGENTS.md",
+            r"^- \*\*No claim, no write\.\*\*",
+            "- **No claim, no write.** See ![a [b](c)](d).",
+        )
+        self.guide("claim-before-write", "`No claim, no write. See a b.`")
+        self.assertEqual([], harness.check(self.repo))
+
+    def test_a_block_form_the_check_does_not_read_is_named(self) -> None:
+        # ikigai-slack#218: an indented code block or a block quote is named, not misread.
+        for added, quote, clause in [
+            ("    *Really* never.", "*Really* never.", "the section has an indented code block"),
+            ("\t*Really* never.", "*Really* never.", "the section has an indented code block"),
+            ("> Really\n> never.", "Really never.", "the section has a block quote"),
+            ("- a\n\n      *Really* never.", "*Really* never.", "the section has an indented code block"),
+            ("-     *Really* never.", "*Really* never.", "the section has an indented code block"),
+            ("- > Really\n  > never.", "Really never.", "the section has a block quote"),
+        ]:
+            with self.subTest(added=added):
+                shutil.copy(ROOT / "AGENTS.md", self.repo / "AGENTS.md")
+                self.restore()
+                self.edit("AGENTS.md", r"^(?=1\. Open your pull request as a draft)", f"{added}\n\n")
+                self.guide("ask-dax-dont-guess", f"`{quote}` `Never mark it ready for review.`")
+                self.assertEqual(
+                    [
+                        f"{GUIDES}ask-dax-dont-guess: quotes `{quote}`, which the check "
+                        f"can't find in AGENTS.md `## Ask Dax, don't guess`: {clause}, "
+                        "which the check does not read"
+                    ],
+                    self.problems("ask-dax-dont-guess"),
+                )
+
+    def test_block_forms_the_check_reads_are_read_as_commonmark_does(self) -> None:
+        # ikigai-slack#218: every other block form is read, each as a reader sees it.
+        for added, words in [
+            # A list item ends the paragraph before it; a line indented to an item's text
+            # after a blank line is a paragraph of the item, not code; a marker is its text.
+            ("- *Really\n- never.*", "- *Really - never.*"),
+            ("- a\n\n  *Really* never.", "- a Really never."),
+            ("1. a\n2. *Really\n3. never.*", "1. a 2. *Really 3. never.*"),
+            # A list starting at 2 does not interrupt a paragraph, so its line continues it.
+            ("*Really\n2. never.*", "Really 2. never."),
+            # A thematic break ends a paragraph and shows no words.
+            ("*Really\n***\nnever.*", "*Really never.*"),
+            ("*Really\n- - -\nnever.*", "*Really never.*"),
+            # An ATX heading in a section is its words, closing #s dropped, a block of its own.
+            ("### *Really ###\nnever.*", "*Really never.*"),
+            ("- ## *Really*\n\nnever.", "- Really never."),
+            # A fence in a list item closes at the item's indentation.
+            ("- ```\n  *Really*\n  ```\n\nnever.", "- *Really* never."),
+        ]:
+            with self.subTest(added=added):
+                shutil.copy(ROOT / "AGENTS.md", self.repo / "AGENTS.md")
+                self.edit("AGENTS.md", r"^(?=1\. Open your pull request as a draft)", f"{added}\n\n")
+                section = harness.read_sections(self.repo / "AGENTS.md")["Ask Dax, don't guess"]
+                self.assertIn(f"this file settles. {words} 1. Open", section.body)
+                self.assertEqual((), section.unread)
+
+    def test_a_heading_inside_another_block_opens_no_section(self) -> None:
+        # ikigai-slack#218: `## ` opens a section only as a top-level ATX heading, and an
+        # HTML block runs to its end, a `## ` line inside it included (CommonMark 4.6).
+        for added in ["<div>\n## Really\n</div>", "<!--\n\n## Really\n\n-->", "- a\n\n  ## Really"]:
+            with self.subTest(added=added):
+                shutil.copy(ROOT / "AGENTS.md", self.repo / "AGENTS.md")
+                self.edit("AGENTS.md", r"^(?=1\. Open your pull request as a draft)", f"{added}\n\n")
+                self.assertEqual([], harness.check(self.repo))
+                self.assertNotIn("Really", harness.read_sections(self.repo / "AGENTS.md"))
+        # A top-level one does, however it is written: indented, by a tab, or closed by #s.
+        for heading in [" ## Really ##", "##\tReally", "## Really #"]:
+            with self.subTest(heading=heading):
+                shutil.copy(ROOT / "AGENTS.md", self.repo / "AGENTS.md")
+                self.edit("AGENTS.md", r"^(?=1\. Open your pull request as a draft)", f"{heading}\n\n")
+                self.assertIn("Really", harness.read_sections(self.repo / "AGENTS.md"))
+
     # statedIn is a file inside this repository, compared by what it resolves to.
 
     def test_a_stated_in_path_outside_the_repository_fails(self) -> None:
