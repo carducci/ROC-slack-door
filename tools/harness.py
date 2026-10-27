@@ -813,7 +813,9 @@ def stated_file(root: Path, name: str) -> tuple[Path | None, str]:
     return path, ""
 
 
-FENCE = re.compile(r" {0,3}(`{3,}|~{3,})")
+# A fence opens with three or more of one character; a backtick fence's info string holds no
+# backtick (CommonMark 4.5), so a line opening with a ``` code span opens none.
+FENCE = re.compile(r" {0,3}(`{3,}(?=[^`]*$)|~{3,})")
 CODE_SPAN = re.compile(r"(?<!`)(`+)(?!`)(.+?)(?<!`)\1(?!`)", re.S)
 
 
