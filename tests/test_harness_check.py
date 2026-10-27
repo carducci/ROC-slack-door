@@ -11,6 +11,7 @@ import io
 import os
 import re
 import shutil
+import socket
 import sys
 import tempfile
 import types
@@ -913,6 +914,90 @@ class GuideTextTest(unittest.TestCase):
             self.problems("ask-dax-continue-draft"),
         )
 
+    def test_a_stated_in_directory_is_a_directory_not_a_file(self) -> None:
+        # ikigai-slack#234: `tools` is in the repository; what is wrong is that it is no file.
+        for name in ("tools", "tools/", "./tools"):
+            with self.subTest(name=name):
+                self.restore()
+                self.guide("ask-dax-continue-draft", stated_in=name)
+                self.assertEqual(
+                    [
+                        f"{GUIDES}ask-dax-continue-draft: statedIn {name!r}, "
+                        "which is a directory, not a file"
+                    ],
+                    self.problems("ask-dax-continue-draft"),
+                )
+
+    def test_an_empty_stated_in_is_empty(self) -> None:
+        # ikigai-slack#234: an empty name resolves to the root, which is in the repository.
+        self.guide("ask-dax-continue-draft", stated_in="")
+        self.assertEqual(
+            [f"{GUIDES}ask-dax-continue-draft: statedIn '', which is empty"],
+            self.problems("ask-dax-continue-draft"),
+        )
+
+    @unittest.skipUnless(hasattr(os, "mkfifo"), "a FIFO is made by os.mkfifo, POSIX only")
+    def test_a_stated_in_that_is_neither_file_nor_directory_is_not_a_file(self) -> None:
+        # ikigai-slack#234: a FIFO is in the repository too, and is not a file. Only repo_file
+        # is asked: `check` reads what repo_file passes, and reading a FIFO nothing writes to
+        # blocks forever, so if the branch regressed, the check would hang instead of failing
+        # (ikigai-slack#256). The socket case runs the check through.
+        os.mkfifo(self.repo / "PIPE.md")
+        self.assertEqual((None, "is not a file"), harness.repo_file(self.repo.resolve(), "PIPE.md"))
+
+    @unittest.skipUnless(hasattr(socket, "AF_UNIX"), "a socket file needs AF_UNIX, POSIX only")
+    def test_a_stated_in_socket_is_not_a_file(self) -> None:
+        # ikigai-slack#234 and ikigai-slack#256: a socket is in the repository and is no file,
+        # and opening one to read it fails at once (ENXIO), so if repo_file let it through this
+        # would fail with the system's words, never hang.
+        with socket.socket(socket.AF_UNIX) as sock:
+            sock.bind(os.fspath(self.repo / "SOCK.md"))
+        self.guide("ask-dax-continue-draft", stated_in="SOCK.md")
+        self.assertEqual(
+            [f"{GUIDES}ask-dax-continue-draft: statedIn 'SOCK.md', which is not a file"],
+            self.problems("ask-dax-continue-draft"),
+        )
+
+    def test_a_stated_in_symlink_that_resolves_to_nothing_is_said_so(self) -> None:
+        # ikigai-slack#257: a symlink to a file that is not there, or one that loops, is in the
+        # repository; what is wrong is where it points. On Python 3.12 a loop made resolve()
+        # raise RuntimeError, so the check crashed rather than say either.
+        for name, links, why in (
+            ("dangling.md", [("dangling.md", "missing.md")], "is a symlink to nothing"),
+            ("loop", [("loop", "loop")], "is a symlink loop"),
+            ("ping.md", [("ping.md", "pong.md"), ("pong.md", "ping.md")], "is a symlink loop"),
+        ):
+            with self.subTest(name=name):
+                for link, target in links:
+                    symlink_or_skip(self, self.repo / link, Path(target))
+                self.restore()
+                self.guide("ask-dax-continue-draft", stated_in=name)
+                self.assertEqual(
+                    [f"{GUIDES}ask-dax-continue-draft: statedIn {name!r}, which {why}"],
+                    self.problems("ask-dax-continue-draft"),
+                )
+
+    @unittest.skipIf(os.name == "nt", "a mode of 000 stops nothing on Windows")
+    @unittest.skipIf(getattr(os, "geteuid", lambda: 1)() == 0, "root reads a mode-000 directory")
+    def test_a_stated_in_under_a_directory_that_cannot_be_searched_cannot_be_read(self) -> None:
+        # ikigai-slack#257: in the repository, and refused with the system's reason, as a file
+        # that can't be read is. On Python 3.12 exists() raised the PermissionError instead.
+        locked = self.repo / "locked"
+        locked.mkdir()
+        shutil.copy(self.repo / "AGENTS.md", locked / "AGENTS.md")
+        locked.chmod(0)
+        try:
+            self.guide("ask-dax-continue-draft", stated_in="locked/AGENTS.md")
+            self.assertEqual(
+                [
+                    f"{GUIDES}ask-dax-continue-draft: statedIn 'locked/AGENTS.md', "
+                    f"which can't be read ({os.strerror(errno.EACCES)})"
+                ],
+                self.problems("ask-dax-continue-draft"),
+            )
+        finally:
+            locked.chmod(0o755)
+
     def test_another_spelling_of_agents_md_is_agents_md(self) -> None:
         # P8 of ikigai-slack#187: the guide still cites `## 7. …` of AGENTS.md.
         self.guide("read-accessibility-first", stated_in="./AGENTS.md")
@@ -1021,6 +1106,102 @@ class ControlCodeTest(unittest.TestCase):
             [f"{CONTROLS}ci-checks: enforcedAt {where}, and {where} is not in this repository"],
             self.enforced_at(where),
         )
+
+    def test_an_enforced_at_directory_is_a_directory_not_a_file(self) -> None:
+        # ikigai-slack#234: `tools` is in the repository; what is wrong is that it is no file.
+        # Under tools/ (a code root) the sensor is also asked for a firing test, as it would be
+        # for a file there: that problem is its own, and this test only wants it not named as
+        # absent.
+        for where, path in (
+            ("tools", "tools"),
+            (".github/workflows", ".github/workflows"),
+            (".github/workflows/", ".github/workflows/"),
+            (".github/workflows#main", ".github/workflows"),
+        ):
+            with self.subTest(where=where):
+                shutil.copy(ROOT / ".gonk/harness/harness.ttl", self.repo / ".gonk/harness/harness.ttl")
+                problems = self.enforced_at(where)
+                self.assertEqual(
+                    f"{CONTROLS}ci-checks: enforcedAt {where}, and {path} is a directory, not a file",
+                    problems[0],
+                )
+                self.assertEqual([], [p for p in problems if "not in this repository" in p])
+                if not where.startswith("tools"):
+                    self.assertEqual(1, len(problems), "\n".join(problems))
+
+    def test_an_empty_enforced_at_is_empty(self) -> None:
+        # ikigai-slack#234: an empty path resolves to the root, which is in the repository. It
+        # is shown quoted, as nothing else makes it visible, and `#main` alone has one too.
+        for where in ("", "#main"):
+            with self.subTest(where=where):
+                shutil.copy(ROOT / ".gonk/harness/harness.ttl", self.repo / ".gonk/harness/harness.ttl")
+                self.assertEqual(
+                    [f"{CONTROLS}ci-checks: enforcedAt {where!r}, and its path is empty"],
+                    self.enforced_at(where),
+                )
+
+    @unittest.skipUnless(hasattr(os, "mkfifo"), "a FIFO is made by os.mkfifo, POSIX only")
+    def test_an_enforced_at_that_is_neither_file_nor_directory_is_not_a_file(self) -> None:
+        # ikigai-slack#234: a FIFO is in the repository too, and is not a file. Only repo_file
+        # is asked, as in GuideTextTest: reading a FIFO nothing writes to blocks forever
+        # (ikigai-slack#256). The socket case runs the check through.
+        os.mkfifo(self.repo / ".github/workflows/pipe.yml")
+        self.assertEqual(
+            (None, "is not a file"),
+            harness.repo_file(self.repo.resolve(), ".github/workflows/pipe.yml"),
+        )
+
+    @unittest.skipUnless(hasattr(socket, "AF_UNIX"), "a socket file needs AF_UNIX, POSIX only")
+    def test_an_enforced_at_socket_is_not_a_file(self) -> None:
+        # ikigai-slack#234 and ikigai-slack#256: a socket is no file, and opening one to read
+        # it fails at once (ENXIO), so this fails rather than hangs if repo_file lets it through.
+        # `#main` makes the check read the file for the name, as a statedIn is always read.
+        with socket.socket(socket.AF_UNIX) as sock:
+            sock.bind(os.fspath(self.repo / ".github/workflows/sock.yml"))
+        where = ".github/workflows/sock.yml#main"
+        self.assertEqual(
+            [f"{CONTROLS}ci-checks: enforcedAt {where}, and .github/workflows/sock.yml is not a file"],
+            self.enforced_at(where),
+        )
+
+    def test_an_enforced_at_symlink_that_resolves_to_nothing_is_said_so(self) -> None:
+        # ikigai-slack#257: a symlink to a file that is not there, or one that loops, is in the
+        # repository; what is wrong is where it points. On Python 3.12 a loop made resolve()
+        # raise RuntimeError, so the check crashed rather than say either.
+        for where, links, why in (
+            ("dangling.yml", [("dangling.yml", "missing.yml")], "is a symlink to nothing"),
+            ("loop", [("loop", "loop")], "is a symlink loop"),
+            ("ping.yml", [("ping.yml", "pong.yml"), ("pong.yml", "ping.yml")], "is a symlink loop"),
+        ):
+            with self.subTest(where=where):
+                for link, target in links:
+                    symlink_or_skip(self, self.repo / link, Path(target))
+                shutil.copy(ROOT / ".gonk/harness/harness.ttl", self.repo / ".gonk/harness/harness.ttl")
+                self.assertEqual(
+                    [f"{CONTROLS}ci-checks: enforcedAt {where}, and {where} {why}"],
+                    self.enforced_at(where),
+                )
+
+    @unittest.skipIf(os.name == "nt", "a mode of 000 stops nothing on Windows")
+    @unittest.skipIf(getattr(os, "geteuid", lambda: 1)() == 0, "root reads a mode-000 directory")
+    def test_an_enforced_at_under_a_directory_that_cannot_be_searched_cannot_be_read(self) -> None:
+        # ikigai-slack#257: in the repository, and refused with the system's reason, as a file
+        # that can't be read is. On Python 3.12 exists() raised the PermissionError instead.
+        locked = self.repo / "locked"
+        locked.mkdir()
+        shutil.copy(self.repo / ".github/workflows/ci.yml", locked / "ci.yml")
+        locked.chmod(0)
+        try:
+            where = "locked/ci.yml"
+            self.assertEqual(
+                [
+                    f"{CONTROLS}ci-checks: enforcedAt {where}, and {where} "
+                    f"can't be read ({os.strerror(errno.EACCES)})"
+                ],
+                self.enforced_at(where),
+            )
+        finally:
+            locked.chmod(0o755)
 
 
 if __name__ == "__main__":
