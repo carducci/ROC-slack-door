@@ -18,18 +18,21 @@ written against them can move to another chat system by swapping the door undern
 
 | Name | Verbs | What it is |
 |---|---|---|
-| `urn:slack:thread:{key}` | source, sink, exists | A conversation, named by a key the caller chooses. The first write opens it as a new message in the channel; later writes reply in the thread. Reading returns the conversation as JSON, with no Slack ids in it. |
-| `urn:slack:thread:{key}:reaction:{name}` | sink, delete | A reaction on the thread's opening message (`white_check_mark`, for example). |
-| an inbox space ([ikigai-intray](https://crates.io/crates/ikigai-intray)) | the space's own | Where replies and reactions from allowed people land, tagged with the thread's key. A message that starts a new conversation lands with no key. |
+| `urn:slack:channel:{name}:thread:{key}` | source, sink, exists | A conversation, named by a key the caller chooses. The first write opens it as a new message in the channel; later writes reply in the thread. Reading returns the conversation as JSON, with no Slack ids in it. |
+| `urn:slack:channel:{name}:thread:{key}:reaction:{reaction}` | sink, delete | A reaction on the thread's opening message (`white_check_mark`, for example). |
+| `urn:slack:channel:{name}:inbox` ([ikigai-intray](https://crates.io/crates/ikigai-intray)) | the space's own | Where replies and reactions from a channel's speakers land, tagged with the thread's key. A speaker's message that starts a new conversation is recorded as a thread and lands under a key the door mints (`m-` and its time, e.g. `m-1700000000-000001`), so a reply goes under it. |
 
 Three capabilities gate the verbs: `urn:cap:slack:read`, `urn:cap:slack:post`, and
 `urn:cap:slack:react`. A host can let one caller read and another post.
 
-The specs say exactly what each resource does:
-[threads](openspec/specs/threads/spec.md),
-[reactions](openspec/specs/reactions/spec.md),
-[inbox](openspec/specs/inbox/spec.md), and
-[configuration](openspec/specs/configuration/spec.md).
+The specs say exactly what each resource does. While the
+[`channel-resources`](openspec/changes/channel-resources/proposal.md) change is in flight they are its deltas:
+[threads](openspec/changes/channel-resources/specs/threads/spec.md),
+[reactions](openspec/changes/channel-resources/specs/reactions/spec.md),
+[inbox](openspec/changes/channel-resources/specs/inbox/spec.md), and
+[configuration](openspec/changes/channel-resources/specs/configuration/spec.md).
+Once it is archived (task 5.3) they are the same four under `openspec/specs/`.
+The older `urn:slack:thread:{key}` names are still bound beside the channel ones.
 
 ## Two pieces
 

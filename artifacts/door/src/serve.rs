@@ -1,4 +1,5 @@
-//! The served space: `urn:slack:thread:{key}` and its reactions as endpoints in a kernel, plus
+//! The served space: `urn:slack:channel:{name}:thread:{key}` and its reactions,
+//! with the older `urn:slack:thread:{key}` names still bound, as endpoints in a kernel, plus
 //! the inbox space the door drops deliveries into, all behind one `Kernel` that another kernel
 //! mounts over a Unix socket. The door writes the inbox through the kernel, as any caller would,
 //! under the host's own root capability.
@@ -82,7 +83,8 @@ fn ok_text(message: &str) -> Representation {
     )
 }
 
-/// `urn:slack:thread:{key}`: sourcing reads the conversation, sinking posts to it.
+/// The older `urn:slack:thread:{key}`, bound with no channel: it reads only `key`. Sourcing reads
+/// the conversation, sinking posts to it. The channel form is `ChannelThreadEndpoint`.
 pub struct ThreadEndpoint<T: SlackTransport> {
     threads: Shared<T>,
 }
@@ -184,7 +186,9 @@ impl<T: SlackTransport + Send + 'static> Endpoint for ChannelThreadEndpoint<T> {
     }
 }
 
-/// `urn:slack:thread:{key}:reaction:{name}`: sinking adds the reaction, deleting removes it.
+/// The older `urn:slack:thread:{key}:reaction:{name}`, bound with no channel: `name` here is the
+/// reaction. Sinking adds it, deleting removes it. The channel form,
+/// `urn:slack:channel:{name}:thread:{key}:reaction:{reaction}`, is served by `ChannelEndpoint`.
 pub struct ReactionEndpoint<T: SlackTransport> {
     threads: Shared<T>,
 }

@@ -1,13 +1,16 @@
 //! Slack conversations as resources for ikigai.
 //!
-//! A thread is `urn:slack:thread:{key}`, named by a key its caller chooses; a reaction on it is
-//! `urn:slack:thread:{key}:reaction:{name}`; replies from allowed people land in an inbox space.
+//! A thread is `urn:slack:channel:{name}:thread:{key}`, named by a key its caller chooses; a
+//! reaction on it is `urn:slack:channel:{name}:thread:{key}:reaction:{reaction}`; replies and
+//! new messages from a channel's speakers land in `urn:slack:channel:{name}:inbox`, a new message
+//! under a key the door mints.
 //! Everything Slack-specific sits behind a `SlackTransport`, so every scenario in
 //! `openspec/` runs against a fake with no network. What each resource does is specified in
-//! `openspec/changes/slack-resources/` until that change is archived into `openspec/specs/`.
+//! `openspec/changes/channel-resources/specs/` while that change is in flight, and in
+//! `openspec/specs/` once it is archived (task 5.3 of the change).
 //!
-//! The transport, its in-memory fake and the thread resource are in place; reactions and the
-//! inbox are not yet.
+//! The transport, its in-memory fake, the thread and reaction resources and the inbox are in
+//! place.
 
 use std::collections::{BTreeSet, VecDeque};
 
