@@ -701,6 +701,20 @@ mod tests {
     }
 
     #[test]
+    fn a_failed_save_leaves_a_held_thread_as_it_was() {
+        let dir = scratch("save-fails-held");
+        let mut threads = Threads::open(&dir, "C1", FakeSlack::new()).unwrap();
+        threads.write(&all(), "carducci-54", "Opening").unwrap();
+        let held = threads.threads.get(&slot("C1", "carducci-54")).unwrap().clone();
+        let saved = fs::read_to_string(dir.join(MAP_FILE)).unwrap();
+        fs::create_dir(dir.join("threads.tsv.tmp")).unwrap();
+        let other = Thread { channel: "C1".to_owned(), ts: "9.9".to_owned() };
+        threads.record("carducci-54", other).unwrap_err();
+        assert_eq!(threads.threads.get(&slot("C1", "carducci-54")), Some(&held));
+        assert_eq!(fs::read_to_string(dir.join(MAP_FILE)).unwrap(), saved);
+    }
+
+    #[test]
     fn reading_without_the_read_capability_is_refused() {
         let dir = scratch("no-read");
         let mut threads = Threads::open(&dir, "C1", FakeSlack::new()).unwrap();
