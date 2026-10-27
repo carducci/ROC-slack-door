@@ -3,15 +3,21 @@ and a guide and the AGENTS.md section it cites agree on the words they quote."""
 
 from __future__ import annotations
 
+import builtins
 import contextlib
+import errno
 import importlib.util
 import io
+import os
 import re
 import shutil
 import sys
 import tempfile
+import types
 import unittest
-from pathlib import Path
+from collections.abc import Callable
+from pathlib import Path, PureWindowsPath
+from unittest import mock
 
 ROOT = Path(__file__).resolve().parent.parent
 
@@ -21,6 +27,275 @@ sys.modules["harness"] = harness
 spec.loader.exec_module(harness)
 
 GUIDE = "urn:iki:harness:starter:guide:ask-dax-continue-draft"
+
+WINDOWS_RESERVED = {"CON", "PRN", "AUX", "NUL"} | {
+    f"{d}{n}" for d in ("COM", "LPT") for n in range(1, 10)
+}
+
+
+def windows_refuses(path: str | bytes | os.PathLike) -> str | None:
+    """The first part of `path` that Windows can't name a file or directory, or None. `path` is
+    read as Windows reads it, on every platform. A drive (`C:`) counts as one only at the head
+    of a path that is absolute here: a drive with nothing after it but a name is what joining
+    an `x:` part makes on Windows (`Path("/tmp") / "x:"` is `x:`), and here `x:/…` would name
+    a directory `x:` (ikigai-slack#239)."""
+    text = os.fsdecode(path)
+    path = PureWindowsPath(text)
+    if path.drive and not (path.root and Path(text).is_absolute()):
+        return path.drive
+    for part in path.parts[1:] if path.anchor else path.parts:
+        if part in (".", ".."):
+            continue
+        if (
+            any(c in '<>:"|?*' or ord(c) < 32 for c in part)
+            or part.endswith((".", " "))
+            or part.split(".")[0].rstrip(" ").upper() in WINDOWS_RESERVED
+        ):
+            return part
+    return None
+
+
+def make_only_windows_names(test: unittest.TestCase) -> None:
+    """For the rest of `test`, refuse to make a file, directory or link Windows can't name, as
+    Windows would, so a test that makes one fails here too (ikigai-slack#237).
+
+    It guards the calls Python makes a name through (ikigai-slack#240): `open` and `io.open`
+    in a mode that can create (w, x or a), `os.open` with O_CREAT, `os.mkdir`, `os.symlink`,
+    `os.link`, `os.rename` and `os.replace`, and on Windows `_winapi.CopyFile2`, which from
+    Python 3.12 `shutil.copy2` calls instead of copyfile and open (ikigai-slack#245). Through
+    them it guards Path's mkdir, touch, open, write_text, write_bytes, symlink_to, hardlink_to,
+    rename, replace, and from 3.14 copy and move (whose Windows copy is CopyFile2 too, read
+    from the same module), `os.makedirs`, shutil's copy, copy2, copyfile, move and copytree
+    (every name copytree makes), and tempfile. It does not guard os.mknod, os.mkfifo, or a
+    name a subprocess makes.
+
+    It refuses as Windows refuses, with an OSError whose winerror is ERROR_INVALID_NAME (123)
+    and errno EINVAL, since copy2 reads the winerror of what CopyFile2 raises."""
+
+    def guard(make, made: Callable[[tuple, dict], object]):
+        # made: what the call makes, or None when it makes nothing.
+        def guarded(*args, **kwargs):
+            target = made(args, kwargs)
+            if target is not None and not isinstance(target, int):
+                part = windows_refuses(target)
+                if part is not None:
+                    text = os.fsdecode(target)
+                    error = OSError(errno.EINVAL, f"Windows can't name {part!r}", text, 123)
+                    if not hasattr(error, "winerror"):  # only Windows keeps the fourth argument
+                        error.winerror = 123
+                    raise error
+            return make(*args, **kwargs)
+
+        return guarded
+
+    def arg(args: tuple, kwargs: dict, at: int, name: str, default=None):
+        return args[at] if len(args) > at else kwargs.get(name, default)
+
+    def opened(args: tuple, kwargs: dict):
+        creates = any(c in "wxa" for c in arg(args, kwargs, 1, "mode", "r"))
+        return arg(args, kwargs, 0, "file") if creates else None
+
+    def os_opened(args: tuple, kwargs: dict):
+        creates = arg(args, kwargs, 1, "flags", 0) & os.O_CREAT
+        return arg(args, kwargs, 0, "path") if creates else None
+
+    # shutil holds _winapi on Windows and None elsewhere; a test may stand one in to model
+    # Windows. On Windows it is the module pathlib._os reads CopyFile2 from too.
+    winapi = getattr(shutil, "_winapi", None)
+    for owner, name, made in (
+        (builtins, "open", opened),
+        (io, "open", opened),
+        (os, "open", os_opened),
+        (os, "mkdir", lambda args, kwargs: arg(args, kwargs, 0, "path")),
+        *((os, name, lambda args, kwargs: arg(args, kwargs, 1, "dst"))
+          for name in ("symlink", "link", "rename", "replace")),
+        *([(winapi, "CopyFile2", lambda args, kwargs: arg(args, kwargs, 1, "new_file_name"))]
+          if hasattr(winapi, "CopyFile2") else []),
+    ):
+        patcher = mock.patch.object(owner, name, guard(getattr(owner, name), made))
+        patcher.start()
+        test.addCleanup(patcher.stop)
+
+
+def absolute_paths(outside: Path, inside: Path, name: str) -> tuple[str, str, str]:
+    """Absolute paths a test writes as a statedIn or an enforcedAt, spelled with /: `name` in
+    `outside`/x, `inside` itself, and `name` under a directory `x:` of `outside`. The last is
+    built as a string: joined as a Path, Windows reads `x:` as a drive and drops `outside`
+    (ikigai-slack#239)."""
+    return (
+        (outside / "x" / name).as_posix(),
+        inside.as_posix(),
+        f"{outside.as_posix()}/x:/{name}",
+    )
+
+
+class WindowsNamesTest(unittest.TestCase):
+    """The guard the tests below make files under: a name Windows refuses is refused here."""
+
+    def test_a_name_windows_refuses_is_refused(self) -> None:
+        for part in (
+            *("x:", "a<b", "a>b", 'a"b', "a|b", "a?b", "a*b", "a\x01b", "x.", "x "),
+            *("CON", "nul.txt", "com1", "LPT9.md"),
+        ):
+            with self.subTest(part=part):
+                # A string, not a join: Windows joins `x:` as a drive (ikigai-slack#239).
+                self.assertEqual(part, windows_refuses(Path(f"/tmp/{part}/ci.yml")))
+
+    def test_a_name_windows_takes_is_taken(self) -> None:
+        for path in (
+            *("/tmp/x/ci.yml", "../x/RULES.md", "./AGENTS.md", ".github/workflows/ci.yml"),
+            *("CONSOLE.md", "COM10"),
+        ):
+            with self.subTest(path=path):
+                self.assertIsNone(windows_refuses(path))
+
+    def test_the_guard_refuses_before_it_makes(self) -> None:
+        tmp = tempfile.TemporaryDirectory()
+        self.addCleanup(tmp.cleanup)
+        make_only_windows_names(self)
+        # A string, not a join: on Windows `Path(tmp.name) / "x:"` is drive X: (ikigai-slack#239).
+        bad = Path(f"{Path(tmp.name).as_posix()}/x:")
+        with self.assertRaises(OSError):
+            bad.mkdir()
+        self.assertFalse(bad.exists())
+        (Path(tmp.name) / "x").mkdir()
+        self.assertTrue((Path(tmp.name) / "x").is_dir())
+
+    def test_the_names_are_read_as_windows_reads_them(self) -> None:
+        # ikigai-slack#239: on Windows, Path is WindowsPath, which joins and splits as
+        # PureWindowsPath does. Nothing here runs on Windows, so model it.
+        with mock.patch.object(sys.modules[__name__], "Path", PureWindowsPath):
+            self.test_a_name_windows_refuses_is_refused()
+            self.test_a_name_windows_takes_is_taken()
+
+    def test_a_drive_a_join_made_is_refused(self) -> None:
+        # ikigai-slack#239: Windows reads a joined `x:` as a drive, which drops what came
+        # before it. The guard refuses what that join makes, on every platform.
+        for path in (PureWindowsPath("/tmp") / "x:" / "ci.yml", "x:ci.yml", "x:"):
+            with self.subTest(path=str(path)):
+                self.assertEqual("x:", windows_refuses(path))
+
+    def test_an_absolute_path_is_absolute_on_windows(self) -> None:
+        # ikigai-slack#239: on Windows the third of these was the drive-relative `x:ci.yml`.
+        outside = PureWindowsPath("C:\\Users\\me\\AppData\\Local\\Temp\\tmp1")
+        paths = absolute_paths(outside, outside / "repo" / "AGENTS.md", "ci.yml")
+        for path in paths:
+            with self.subTest(path=path):
+                self.assertTrue(path.startswith("C:/Users/me/AppData/Local/Temp/tmp1/"))
+                self.assertTrue(PureWindowsPath(path).is_absolute())
+        with mock.patch.object(sys.modules[__name__], "Path", PureWindowsPath):
+            self.assertEqual("x:", windows_refuses(paths[2]))
+
+    def test_every_way_a_test_makes_a_name_is_guarded(self) -> None:
+        # ikigai-slack#240: each of these made `a:b` here with no error, so a test that made
+        # one passed here and failed on Windows.
+        tmp = tempfile.TemporaryDirectory()
+        self.addCleanup(tmp.cleanup)
+        at = Path(tmp.name)
+        (at / "ok").write_text("ok", encoding="utf-8")
+        (at / "tree").mkdir()
+        if os.name != "nt":  # Windows can't hold a bad name in a tree to copy, so has none to guard
+            Path(f"{at.as_posix()}/tree/a:b").write_text("x", encoding="utf-8")
+        make_only_windows_names(self)
+        # A string, not a join: on Windows `at / "a:b"` is `b` on drive A: (ikigai-slack#239).
+        bad = Path(f"{at.as_posix()}/a:b")
+        with mock.patch.object(sys.modules[__name__], "Path", PureWindowsPath):
+            self.assertEqual("a:b", windows_refuses("C:/Users/me/tmp1/a:b"))
+        makers = {
+            "Path.mkdir": lambda: bad.mkdir(),
+            "Path.touch": lambda: bad.touch(),
+            "Path.write_text": lambda: bad.write_text("x", encoding="utf-8"),
+            "Path.write_bytes": lambda: bad.write_bytes(b"x"),
+            "Path.open": lambda: bad.open("w").close(),
+            "Path.symlink_to": lambda: bad.symlink_to(at / "ok"),
+            "Path.hardlink_to": lambda: bad.hardlink_to(at / "ok"),
+            "Path.rename": lambda: (at / "ok").rename(bad),
+            "Path.replace": lambda: (at / "ok").replace(bad),
+            "open": lambda: open(bad, "w").close(),
+            "open, x": lambda: open(bad, "x").close(),
+            "open, a": lambda: open(bad, "a").close(),
+            "os.open": lambda: os.close(os.open(bad, os.O_WRONLY | os.O_CREAT)),
+            "os.mkdir": lambda: os.mkdir(bad),
+            "os.makedirs": lambda: os.makedirs(bad / "c"),
+            "os.rename": lambda: os.rename(at / "ok", bad),
+            "os.replace": lambda: os.replace(at / "ok", bad),
+            "os.symlink": lambda: os.symlink(at / "ok", bad),
+            "os.link": lambda: os.link(at / "ok", bad),
+            "shutil.copy": lambda: shutil.copy(at / "ok", bad),
+            "shutil.copy2": lambda: shutil.copy2(at / "ok", bad),
+            "shutil.copyfile": lambda: shutil.copyfile(at / "ok", bad),
+            "shutil.move": lambda: shutil.move(at / "ok", bad),
+            "shutil.copytree": lambda: shutil.copytree(at / "tree", bad),
+            "tempfile.mkdtemp": lambda: tempfile.mkdtemp(dir=at, prefix="a:"),
+        }
+        if os.name != "nt":
+            makers["shutil.copytree, a name inside"] = lambda: shutil.copytree(at / "tree", at / "t")
+        if hasattr(Path, "copy"):  # Python 3.14
+            makers["Path.copy"] = lambda: (at / "ok").copy(bad)
+            makers["Path.move"] = lambda: (at / "ok").move(bad)
+            if os.name != "nt":
+                makers["Path.copy, a name inside"] = lambda: (at / "tree").copy(at / "t")
+        for maker, make in makers.items():
+            with self.subTest(maker=maker):
+                try:
+                    with self.assertRaises(OSError):
+                        make()
+                finally:
+                    made = [p for p in at.iterdir() if ":" in p.name] + list(at.glob("t/*"))
+                    for p in made:
+                        shutil.rmtree(p) if p.is_dir() and not p.is_symlink() else p.unlink()
+                    moved = not (at / "ok").exists()
+                    if moved:
+                        (at / "ok").write_text("ok", encoding="utf-8")
+                self.assertEqual([], [p.relative_to(at).as_posix() for p in made])
+                self.assertFalse(moved, "ok was moved")
+
+    @unittest.skipIf(os.name == "nt", "Windows has the real CopyFile2; this models it elsewhere")
+    def test_a_copy_windows_makes_with_copyfile2_is_guarded(self) -> None:
+        # ikigai-slack#245: on Windows, from Python 3.12, shutil.copy2 calls
+        # _winapi.CopyFile2(src, dst, flags) and returns before copyfile or open, so the guard
+        # on open never saw the name. copytree and move copy files with copy2, and from 3.14
+        # Path.copy and Path.move copy with the same CopyFile2 (pathlib._os.copyfile2). Nothing
+        # here runs on Windows, so _winapi is modelled, as shutil sees it: shutil reads
+        # `_winapi.CopyFile2` when copy2 runs, from the module it imported.
+        tmp = tempfile.TemporaryDirectory()
+        self.addCleanup(tmp.cleanup)
+        at = Path(tmp.name)
+        (at / "ok").write_text("ok", encoding="utf-8")
+        (at / "tree").mkdir()
+        Path(f"{at.as_posix()}/tree/a:b").write_text("x", encoding="utf-8")
+        copied: list[str] = []
+        winapi = types.ModuleType("_winapi")
+        winapi.COPY_FILE_ALLOW_DECRYPTED_DESTINATION = 0x8
+        winapi.COPY_FILE_COPY_SYMLINK = 0x800
+        winapi.ERROR_PRIVILEGE_NOT_HELD = 1314
+        winapi.ERROR_ACCESS_DENIED = 5
+
+        def copy_file_2(src: str, dst: str, flags: int, progress_routine=None) -> None:
+            copied.append(dst)  # Windows would make dst here, as a file or an a:b stream
+            shutil.copyfile(src, dst)
+
+        winapi.CopyFile2 = copy_file_2
+        with mock.patch.object(shutil, "_winapi", winapi):
+            make_only_windows_names(self)
+            bad = Path(f"{at.as_posix()}/a:b")
+            makers = {
+                "shutil.copy2": lambda: shutil.copy2(at / "ok", bad),
+                "shutil.copytree, a name inside": lambda: shutil.copytree(at / "tree", at / "t"),
+                "shutil.move, across devices": lambda: shutil.move(at / "ok", bad),
+            }
+            across = OSError(errno.EXDEV, "Invalid cross-device link")  # so move copies with copy2
+            with mock.patch.object(os, "rename", side_effect=across):
+                for maker, make in makers.items():
+                    with self.subTest(maker=maker):
+                        with self.assertRaises(OSError):
+                            make()
+                        self.assertEqual([], copied, "CopyFile2 was called with a name Windows refuses")
+                        self.assertEqual(["ok", "tree"], sorted(p.name for p in at.iterdir() if p.name != "t"))
+                        self.assertEqual([], list(at.glob("t/*")))
+            # A name Windows takes still goes through CopyFile2, so the guard changes nothing else.
+            self.assertEqual(at / "fine", Path(shutil.copy2(at / "ok", at / "fine")))
+            self.assertEqual([str(at / "fine")], copied)
 
 
 class HarnessCheckTest(unittest.TestCase):
@@ -37,6 +312,7 @@ class GuideTextDriftTest(unittest.TestCase):
         self.repo = Path(self.tmp.name) / "repo"
         shutil.copytree(ROOT, self.repo, ignore=shutil.ignore_patterns(".git", "target"))
         self.assertEqual([], harness.check(self.repo), "the copy agrees before it is changed")
+        make_only_windows_names(self)
 
     def tearDown(self) -> None:
         self.tmp.cleanup()
@@ -111,6 +387,7 @@ class GuideTextTest(unittest.TestCase):
         self.repo = self.outside / "repo"
         shutil.copytree(ROOT, self.repo, ignore=shutil.ignore_patterns(".git", "target"))
         self.assertEqual([], harness.check(self.repo), "the copy agrees before it is changed")
+        make_only_windows_names(self)
 
     def tearDown(self) -> None:
         self.tmp.cleanup()
@@ -133,7 +410,8 @@ class GuideTextTest(unittest.TestCase):
             self.assertEqual(1, n)
         if stated_in is not None:
             self.assertIn('harness:statedIn "AGENTS.md"', block)
-            block = block.replace('harness:statedIn "AGENTS.md"', f'harness:statedIn "{stated_in}"')
+            literal = harness.L(stated_in).nt()
+            block = block.replace('harness:statedIn "AGENTS.md"', f"harness:statedIn {literal}")
         path.write_text(text[:start] + block + text[end:], encoding="utf-8")
 
     def restore(self) -> None:
@@ -538,7 +816,18 @@ class GuideTextTest(unittest.TestCase):
         # ikigai-slack#197: refused whether it names a file outside the repository or inside.
         (self.outside / "x").mkdir()
         shutil.copy(self.repo / "AGENTS.md", self.outside / "x" / "RULES.md")
-        for name in (str(self.outside / "x" / "RULES.md"), str(self.repo / "AGENTS.md")):
+        # ikigai-slack#235: a drive letter, a URL or any colon is not relative either, on every
+        # platform, and a path is written with / so it is one on every platform. A colon is
+        # refused from the string alone, so `x:` is never made: Windows can't (ikigai-slack#237).
+        for name in (
+            *absolute_paths(self.outside, self.repo / "AGENTS.md", "RULES.md"),
+            "C:/Windows/win.ini",
+            "C:\\x\\RULES.md",
+            "C:AGENTS.md",
+            "\\\\server\\share\\RULES.md",
+            "../x:/RULES.md",
+            "file:///etc/passwd",
+        ):
             with self.subTest(name=name):
                 self.restore()
                 self.guide("ask-dax-continue-draft", stated_in=name)
@@ -549,6 +838,14 @@ class GuideTextTest(unittest.TestCase):
                     ],
                     self.problems("ask-dax-continue-draft"),
                 )
+
+    def test_a_stated_in_path_with_a_nul_is_not_a_path(self) -> None:
+        # Finding 3 of ikigai-slack#235: a sentence, not a ValueError from resolve().
+        self.guide("ask-dax-continue-draft", stated_in="a\x00b")
+        self.assertEqual(
+            [f"{GUIDES}ask-dax-continue-draft: statedIn 'a\\x00b', which is not a path"],
+            self.problems("ask-dax-continue-draft"),
+        )
 
     def test_another_spelling_of_agents_md_is_agents_md(self) -> None:
         # P8 of ikigai-slack#187: the guide still cites `## 7. …` of AGENTS.md.
@@ -570,6 +867,94 @@ class GuideTextTest(unittest.TestCase):
                 with contextlib.redirect_stdout(out):
                     self.assertEqual(1, harness.main(["check", "--repo", str(self.repo)]))
                 self.assertIn("which is not UTF-8 text", out.getvalue())
+
+
+CONTROLS = "urn:iki:harness:starter:control:"
+
+
+class ControlCodeTest(unittest.TestCase):
+    """A control's enforcedAt names a file inside this repository, compared by what it
+    resolves to, as a guide's statedIn is (ikigai-slack#193)."""
+
+    def setUp(self) -> None:
+        self.tmp = tempfile.TemporaryDirectory()
+        self.outside = Path(self.tmp.name)
+        self.repo = self.outside / "repo"
+        shutil.copytree(ROOT, self.repo, ignore=shutil.ignore_patterns(".git", "target"))
+        self.assertEqual([], harness.check(self.repo), "the copy agrees before it is changed")
+        make_only_windows_names(self)
+        (self.outside / "x").mkdir()
+        shutil.copy(self.repo / ".github/workflows/ci.yml", self.outside / "x" / "ci.yml")
+
+    def tearDown(self) -> None:
+        self.tmp.cleanup()
+
+    def enforced_at(self, where: str) -> list[str]:
+        """Point the copy's ctl:ci-checks at `where`, and check: the problems it is named in."""
+        path = self.repo / ".gonk/harness/harness.ttl"
+        text = path.read_text(encoding="utf-8")
+        start = text.index("ctl:ci-checks a harness:Control ;\n")
+        end = text.index(" .\n", start)
+        block = text[start:end]
+        self.assertIn('harness:enforcedAt ".github/workflows/ci.yml"', block)
+        literal = harness.L(where).nt()
+        block = block.replace('harness:enforcedAt ".github/workflows/ci.yml"', f"harness:enforcedAt {literal}")
+        path.write_text(text[:start] + block + text[end:], encoding="utf-8")
+        return [p for p in harness.check(self.repo) if p.startswith(CONTROLS + "ci-checks:")]
+
+    def test_an_enforced_at_path_outside_the_repository_fails(self) -> None:
+        where = "../x/ci.yml"
+        self.assertEqual(
+            [f"{CONTROLS}ci-checks: enforcedAt {where}, and {where} is outside this repository"],
+            self.enforced_at(where),
+        )
+
+    def test_an_absolute_enforced_at_path_is_not_relative_to_the_repository(self) -> None:
+        # Refused whether it names a file outside the repository or inside, as statedIn is, and
+        # however it is spelled: a drive letter, a URL or any colon that is not `owner/repo:`
+        # (ikigai-slack#235). A path is written with / so it is one on every platform. A colon is
+        # refused from the string alone, so `x:` is never made: Windows can't (ikigai-slack#237).
+        for where in (
+            *absolute_paths(self.outside, self.repo / ".github/workflows/ci.yml", "ci.yml"),
+            "C:/Windows/win.ini",
+            "C:\\x\\ci.yml",
+            "C:.github/workflows/ci.yml",
+            "\\\\server\\share\\ci.yml",
+            "../x:/ci.yml",
+            "../a:b/ci.yml",
+            "file:///etc/passwd",
+        ):
+            with self.subTest(where=where):
+                shutil.copy(ROOT / ".gonk/harness/harness.ttl", self.repo / ".gonk/harness/harness.ttl")
+                self.assertEqual(
+                    [
+                        f"{CONTROLS}ci-checks: enforcedAt {where}, and {where} "
+                        "is not a path relative to this repository's root"
+                    ],
+                    self.enforced_at(where),
+                )
+
+    def test_an_enforced_at_path_with_a_nul_is_not_a_path(self) -> None:
+        # Finding 3 of ikigai-slack#235: a sentence, not a ValueError from resolve().
+        where = "a\x00b"
+        self.assertEqual(
+            [f"{CONTROLS}ci-checks: enforcedAt {where}, and {where} is not a path"],
+            self.enforced_at(where),
+        )
+
+    def test_an_enforced_at_in_another_repository_is_not_read_here(self) -> None:
+        # `owner/repo:path`, as vocabulary.ttl gives it, is the only form not read as a path here.
+        for where in ("carducci/ROC-slack-door:nowhere.yml", "ikigai-rs/ikigai-ledger:src/x.rs#f"):
+            with self.subTest(where=where):
+                shutil.copy(ROOT / ".gonk/harness/harness.ttl", self.repo / ".gonk/harness/harness.ttl")
+                self.assertEqual([], self.enforced_at(where))
+
+    def test_an_enforced_at_file_that_is_not_here_still_fails(self) -> None:
+        where = ".github/workflows/nowhere.yml"
+        self.assertEqual(
+            [f"{CONTROLS}ci-checks: enforcedAt {where}, and {where} is not in this repository"],
+            self.enforced_at(where),
+        )
 
 
 if __name__ == "__main__":

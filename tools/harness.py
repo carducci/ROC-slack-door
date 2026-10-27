@@ -577,9 +577,15 @@ def control_id(iri: I) -> str | None:
     return None
 
 
+# `owner/repo:path` in another repository, as vocabulary.ttl gives it: a GitHub owner (no dot,
+# so not `..`) and a repository name other than `.` or `..`.
+REMOTE = re.compile(r"[A-Za-z0-9-]+/(?!\.\.?:)[A-Za-z0-9_.-]+:.")
+
+
 def is_local(where: str) -> bool:
-    """`path[#name]` in this repository, rather than `owner/repo:path` in another."""
-    return ":" not in where.split("#", 1)[0]
+    """`path[#name]` in this repository, rather than `owner/repo:path` in another. Anything that
+    is not the remote form is local, so `repo_file` refuses a drive letter, a URL or a colon."""
+    return REMOTE.match(where.split("#", 1)[0]) is None
 
 
 def process_parts(repo: Path) -> set[str]:
@@ -663,6 +669,7 @@ def check(repo: Path) -> list[str]:
     """Everything that disagrees between this repository's harness graph, its vocabulary, its
     code and its AGENTS.md, as sentences. Empty is agreement."""
     bad: list[str] = []
+    root = repo.resolve()
     try:
         vocab = read_graph(repo / VOCAB_FILE)
         g = read_graph(repo / GRAPH_FILE)
@@ -723,9 +730,10 @@ def check(repo: Path) -> list[str]:
             if not is_local(where):
                 continue
             path, _, name = where.partition("#")
-            if not (repo / path).is_file():
-                bad.append(f"{s.value}: enforcedAt {where}, and {path} is not in this repository")
-            elif name and not defined_in(repo / path, name):
+            file, why = repo_file(root, path)
+            if file is None:
+                bad.append(f"{s.value}: enforcedAt {where}, and {path} {why}")
+            elif name and not defined_in(file, name):
                 bad.append(f"{s.value}: enforcedAt {where}, and {path} has no {name}")
         if fires_into_log(g, s) and not g.values(s, H + "firedBy"):
             bad.append(
@@ -757,13 +765,12 @@ def check(repo: Path) -> list[str]:
 
     # The file each guide is stated in, inside this repository: it cites a heading the file
     # has, and quotes that section, word for word. AGENTS.md: every rule heading has a guide.
-    root = repo.resolve()
     agents_md = root / "AGENTS.md"
     read: dict[Path, dict[str, Section] | str] = {}
     cited = set()
     for s in sorted(guides, key=lambda t: t.value):
         for name in g.values(s, H + "statedIn"):
-            path, why = stated_file(root, name)
+            path, why = repo_file(root, name)
             if path is not None and path not in read:
                 read[path] = read_sections(path)
             sections = read[path] if path is not None else why
@@ -824,13 +831,18 @@ def check(repo: Path) -> list[str]:
     return bad
 
 
-def stated_file(root: Path, name: str) -> tuple[Path | None, str]:
-    """The file a guide's statedIn names, resolved against the repository's root (as
-    vocabulary.ttl defines it), or None and why: an absolute path is refused wherever it
-    points, and one that leaves the repository through `..` or by a symlink names no file of it."""
-    if Path(name).is_absolute():
+def repo_file(root: Path, name: str) -> tuple[Path | None, str]:
+    """The file a guide's statedIn or a control's enforcedAt names, resolved against the
+    repository's root (as vocabulary.ttl defines both), or None and why. Refused as not relative,
+    on every platform, wherever it points: a name that starts with / or \\ (POSIX absolute, UNC),
+    or holds a colon (a drive letter, a URL, a colon in a directory's name). One that leaves the
+    repository through `..` or by a symlink names no file of it, and a NUL is no path at all."""
+    if name.startswith(("/", "\\")) or ":" in name or Path(name).is_absolute():
         return None, "is not a path relative to this repository's root"
-    path = (root / name).resolve()
+    try:
+        path = (root / name).resolve()
+    except (OSError, ValueError):
+        return None, "is not a path"
     if not path.is_relative_to(root):
         return None, "is outside this repository"
     if not path.is_file():
