@@ -37,8 +37,10 @@ admit a request in another.
 The configuration SHALL list the channels the door serves, each by a name of its own (1 to 40
 lowercase letters, digits and `-`) with its Slack channel id and the Slack user ids of its
 speakers. The door MUST refuse to start when no channel is declared, when a name is invalid or
-declared twice, or when a channel has no id or no speakers, naming the channel. A name that is
-not declared SHALL be refused as `no-channel`, without calling Slack.
+declared twice, or when a channel has no id or no speakers, naming the channel. It MUST refuse to
+start when a channel's id holds a tab, newline or other control character, naming the channel
+and its setting. A name that is not declared SHALL be refused as `no-channel`, without calling
+Slack.
 
 #### Scenario: Two channels
 
@@ -49,6 +51,11 @@ not declared SHALL be refused as `no-channel`, without calling Slack.
 
 - **WHEN** the host declares `fixme` with an id and no speakers
 - **THEN** the door refuses to start, naming `fixme`
+
+#### Scenario: A channel id with a control character stops the start
+
+- **WHEN** the host declares `fixme` with an id that holds a tab, newline or other control character
+- **THEN** the door refuses to start, naming `fixme` and `SLACK_CHANNEL_FIXME_ID`, and nothing is posted
 
 #### Scenario: An undeclared channel
 
