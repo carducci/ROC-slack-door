@@ -761,6 +761,18 @@ mod tests {
     }
 
     #[test]
+    fn a_channel_id_with_a_tab_or_newline_posts_nothing() {
+        for (n, bad) in ["C1\tx", "C1\nx"].iter().enumerate() {
+            let dir = scratch(&format!("bad-channel-post-{n}"));
+            let mut threads = Threads::open(&dir, bad, FakeSlack::new()).unwrap();
+            for _ in 0..2 {
+                assert!(threads.write(&all(), "carducci-54", "Opening").is_err(), "{bad:?}");
+            }
+            assert!(threads.transport().posts().is_empty(), "{bad:?}");
+        }
+    }
+
+    #[test]
     fn a_channel_id_with_a_tab_or_newline_is_refused_before_the_map() {
         for (n, bad) in ["C1\tx", "C1\nx"].iter().enumerate() {
             let dir = scratch(&format!("bad-channel-{n}"));
