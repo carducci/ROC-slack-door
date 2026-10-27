@@ -9,7 +9,7 @@ use std::io::{self, Write};
 use std::path::{Path, PathBuf};
 
 use crate::conversation::utc;
-use crate::{Event, SlackTransport, Threads};
+use crate::{check_key, Event, SlackTransport, Threads};
 
 /// The file in the state directory that lists the ids of events already delivered.
 const DELIVERED_FILE: &str = "delivered.txt";
@@ -47,6 +47,15 @@ struct InboxChannel {
 /// `m-1700000000-000001`.
 fn mint_key(ts: &str) -> String {
     format!("m-{}", ts.replace('.', "-"))
+}
+
+/// Whether `ts` has the shape Slack's timestamps have: digits, one dot, digits.
+fn is_slack_ts(ts: &str) -> bool {
+    ts.split_once('.').is_some_and(|(seconds, micros)| {
+        [seconds, micros]
+            .iter()
+            .all(|part| !part.is_empty() && part.bytes().all(|b| b.is_ascii_digit()))
+    })
 }
 
 /// The filter between Slack's events and the inbox: only allowed people, in the configured
@@ -152,10 +161,19 @@ impl Inbox {
                 let key = match thread.as_deref() {
                     Some(root) => threads.key_for(&channel, root),
                     // A speaker's top-level message opens a thread under a key minted from its time.
+                    // A timestamp of another shape, or a key a caller already holds for another
+                    // message, gets no key: the message is delivered as before, and logged.
                     None => {
                         let key = mint_key(&ts);
-                        threads.adopt(&channel, &key, &ts)?;
-                        Some(key)
+                        if !is_slack_ts(&ts) || check_key(&key).is_err() {
+                            eprintln!("no key for the message at {ts:?} in {channel}: not a Slack timestamp");
+                            None
+                        } else if threads.adopt(&channel, &key, &ts)? {
+                            Some(key)
+                        } else {
+                            eprintln!("no key for the message at {ts} in {channel}: {key} names another message");
+                            None
+                        }
                     }
                 };
                 Some((
@@ -345,6 +363,70 @@ mod tests {
             delivery,
             Some(Delivery::Message { key: Some(k), .. }) if k == "m-1700000100-000001"
         ));
+    }
+
+    #[test]
+    fn a_top_level_message_whose_save_failed_is_keyed_on_redelivery_only_once_saved() {
+        let dir = scratch("save-fails");
+        let (mut threads, _) = with_thread(&dir);
+        let blocker = dir.join("threads.tsv.tmp");
+        fs::create_dir(&blocker).unwrap();
+        let mut inbox = inbox(&dir);
+        let event = reply(CHANNEL, "U1", None, "What's blocked today?");
+        assert!(inbox.deliver(event.clone(), &mut threads).is_err());
+        assert_eq!(threads.key_for(CHANNEL, "1700000100.000001"), None);
+
+        fs::remove_dir(&blocker).unwrap();
+        let delivery = inbox.deliver(event, &mut threads).unwrap();
+        assert!(matches!(
+            delivery,
+            Some(Delivery::Message { key: Some(k), .. }) if k == "m-1700000100-000001"
+        ));
+        drop(threads);
+        let threads = Threads::open(&dir, CHANNEL, FakeSlack::new()).unwrap();
+        assert_eq!(
+            threads.key_for(CHANNEL, "1700000100.000001").as_deref(),
+            Some("m-1700000100-000001")
+        );
+    }
+
+    #[test]
+    fn a_minted_key_a_caller_already_holds_is_never_handed_out() {
+        let dir = scratch("collision");
+        let (mut threads, _) = with_thread(&dir);
+        threads
+            .write(&Grants::all(), "m-1700000100-000001", "The caller's own")
+            .unwrap();
+        let event = reply(CHANNEL, "U1", None, "What's blocked today?");
+        let delivery = inbox(&dir).deliver(event, &mut threads).unwrap();
+        assert!(matches!(delivery, Some(Delivery::Message { key: None, .. })));
+        assert_eq!(threads.key_for(CHANNEL, "1700000100.000001"), None);
+    }
+
+    #[test]
+    fn a_timestamp_that_is_not_digits_dot_digits_mints_no_key() {
+        let bad_timestamps = [
+            "1700000100.000001\tC1\tx",
+            "1700000100.0\nevil",
+            "17000:00100.000001",
+            "abc",
+            "1.2.3",
+            ".5",
+            "5.",
+            "",
+        ];
+        for (n, bad) in bad_timestamps.into_iter().enumerate() {
+            let dir = scratch(&format!("bad-ts-{n}"));
+            let (mut threads, _) = with_thread(&dir);
+            let mut event = reply(CHANNEL, "U1", None, "Hi");
+            if let Event::Message { ts, .. } = &mut event {
+                *ts = bad.to_owned();
+            }
+            let delivery = inbox(&dir).deliver(event, &mut threads).unwrap();
+            assert!(matches!(delivery, Some(Delivery::Message { key: None, .. })), "{bad:?}");
+            drop(threads);
+            Threads::open(&dir, CHANNEL, FakeSlack::new()).unwrap();
+        }
     }
 
     #[test]

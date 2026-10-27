@@ -223,18 +223,23 @@ impl<T: SlackTransport> Threads<T> {
     }
 
     /// Records the message `ts` in the channel with Slack id `channel` as the opening message of
-    /// the thread `key`, as if the door had posted it, and saves the map. A key already in use in
-    /// that channel is left alone.
-    pub fn adopt(&mut self, channel: &str, key: &str, ts: &str) -> io::Result<()> {
-        if self.threads.contains_key(&slot(channel, key)) {
-            return Ok(());
+    /// the thread `key`, as if the door had posted it, and saves the map. Answers whether the key
+    /// now names that message: false, with nothing recorded, when the key is already in use in
+    /// that channel for a different message. The entry is kept only once the map is saved.
+    pub fn adopt(&mut self, channel: &str, key: &str, ts: &str) -> io::Result<bool> {
+        if let Some(held) = self.threads.get(&slot(channel, key)) {
+            return Ok(held.ts == ts);
         }
         let thread = Thread {
             channel: channel.to_owned(),
             ts: ts.to_owned(),
         };
         self.threads.insert(slot(channel, key), thread);
-        self.save()
+        if let Err(error) = self.save() {
+            self.threads.remove(&slot(channel, key));
+            return Err(error);
+        }
+        Ok(true)
     }
 
     /// Whether the key names a thread the door has opened.
