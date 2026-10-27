@@ -870,9 +870,9 @@ def read_sections(path: Path) -> dict[str, Section] | str:
     A line inside a fenced block is the block's text, never a heading; the text outside one
     is read by `inline`, and every run of white space, a line ending in a code span included
     (CommonMark 6.1), as one space. A section notes the forms it holds that are not read:
-    raw HTML, a line of only `=` or `-` under a line of text (a setext heading, which a
-    `## ` section may not end at), and, in every section, the file's link reference
-    definitions (a reference link is not resolved)."""
+    raw HTML, a line of only `=` or `-` under a line of text (it may make a setext heading,
+    which this function never takes for one), and, in every section, the file's link
+    reference definitions (a reference link is not resolved)."""
     try:
         text = path.read_text(encoding="utf-8")
     except UnicodeDecodeError:
