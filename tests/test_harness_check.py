@@ -309,6 +309,128 @@ class GuideTextTest(unittest.TestCase):
                 self.guide("claim-before-write", f"`{quote}`")
                 self.assertEqual([], harness.check(self.repo))
 
+    def test_an_autolink_is_its_address_read_as_nothing_else(self) -> None:
+        # ikigai-slack#202: no emphasis and no backslash escape inside an autolink (CommonMark 6.5).
+        for markdown, words in [
+            ("<https://x.y/_a_>", "https://x.y/_a_"),
+            ("<https://x.y/*a*>", "https://x.y/*a*"),
+            ("<https://x/\\_a\\_>", "https://x/\\_a\\_"),
+            ("*a <https://x.y/*b> c*", "a https://x.y/*b c"),
+            ("<a_b_@c.d>", "a_b_@c.d"),
+        ]:
+            with self.subTest(markdown=markdown):
+                self.assertEqual(words, harness.flat(harness.inline(markdown)))
+        self.edit(
+            "AGENTS.md",
+            r"^- \*\*No claim, no write\.\*\*",
+            "- **No claim, no write.** See <https://x.y/_a_>.",
+        )
+        self.guide("claim-before-write", "`No claim, no write. See https://x.y/_a_.`")
+        self.assertEqual([], harness.check(self.repo))
+
+    def test_a_private_use_character_reads_as_itself(self) -> None:
+        # ikigai-slack#203: a plane-15 character neither crashes the check nor reads as code.
+        for char in ("\U000f0fff", "\U000f0000"):
+            with self.subTest(char=hex(ord(char))):
+                self.assertEqual(f"x {char} y c", harness.flat(harness.inline(f"x {char} y `c`")))
+                shutil.copy(ROOT / "AGENTS.md", self.repo / "AGENTS.md")
+                self.edit(
+                    "AGENTS.md",
+                    r"^(?=1\. Open your pull request as a draft)",
+                    f"x {char} y\n\n",
+                )
+                self.assertEqual([], harness.check(self.repo))
+                section = harness.read_sections(self.repo / "AGENTS.md")["Ask Dax, don't guess"]
+                self.assertIn(f"x {char} y", section.body)
+
+    def test_unequal_delimiter_runs_and_balanced_parentheses_read_as_commonmark(self) -> None:
+        # ikigai-slack#204: CommonMark 6.2's delimiter runs, and 6.3's link destinations.
+        for markdown, words in [
+            ("**Really* never.", "*Really never."),
+            ("*Really** never.", "Really* never."),
+            ("*foo**bar**baz*", "foobarbaz"),
+            ("*foo**bar*", "foo**bar"),
+            ("***strong emph***", "strong emph"),
+            ("**foo*bar*baz**", "foobarbaz"),
+            ("*(*foo*)*", "(foo)"),
+            ("foo*bar*", "foobar"),
+            ("foo_bar_", "foo_bar_"),
+            ("_foo_bar_baz_", "foo_bar_baz"),
+            ("a * b * c", "a * b * c"),
+            ("*a `*`*", "a *"),
+            ("See [the loop](x(y)).", "See the loop."),
+            ("[link](foo(and(bar)))", "link"),
+            ("[link](foo(and(bar))", "[link](foo(and(bar))"),
+            ("[link](foo\\)bar)", "link"),
+            ("[link]()", "link"),
+            ("[link](<a b> \"t\")", "link"),
+            ("[*a*](b)*", "a*"),
+            ("[a [b](c) d](e)", "[a b d](e)"),
+            ("[a `]` b](c)", "a ] b"),
+            ("[a] b", "[a] b"),
+            ("*a\n\nb*", "*a b*"),
+            ("`a\n\nb`", "`a b`"),
+        ]:
+            with self.subTest(markdown=markdown):
+                self.assertEqual(words, harness.flat(harness.inline(markdown)))
+        for added, quote in [
+            ("**Really* never.", "No claim, no write. *Really never."),
+            ("See [the loop](x(y)).", "No claim, no write. See the loop."),
+        ]:
+            with self.subTest(added=added):
+                shutil.copy(ROOT / "AGENTS.md", self.repo / "AGENTS.md")
+                self.restore()
+                self.edit(
+                    "AGENTS.md",
+                    r"^- \*\*No claim, no write\.\*\*",
+                    f"- **No claim, no write.** {added}",
+                )
+                self.guide("claim-before-write", f"`{quote}`")
+                self.assertEqual([], harness.check(self.repo))
+
+    def test_entities_are_the_named_or_numbered_character_or_their_text(self) -> None:
+        for markdown, words in [
+            ("&ampx; &amp;", "&ampx; &"),
+            ("&#0; &#x110000;", "� �"),
+            ("&#42;a&#42;", "*a*"),
+        ]:
+            with self.subTest(markdown=markdown):
+                self.assertEqual(words, harness.flat(harness.inline(markdown)))
+
+    def test_a_quote_spanning_the_heading_and_the_body_says_so(self) -> None:
+        # ikigai-slack#205: a quote no reader sees, refused with a sentence true for it.
+        self.guide("reproduce-before-fix", "`Reproduce before you fix A bug report`")
+        self.assertEqual(
+            [
+                f"{GUIDES}reproduce-before-fix: quotes `Reproduce before you fix A bug report`, "
+                "which runs from the heading of AGENTS.md `## 3. Reproduce before you fix` "
+                "into its body; quote, in backticks, a phrase of one or the other"
+            ],
+            harness.check(self.repo),
+        )
+
+    def test_a_form_the_check_does_not_read_is_named_when_a_quote_is_not_found(self) -> None:
+        # Raw HTML, a link reference definition and a setext underline are not read, so a quote
+        # the check can't find there is not called one the section does not say.
+        for added, clause in [
+            ("<b>Really</b> never.", "the section has raw HTML"),
+            ("[Really][r] never.\n\n[r]: https://x.y", "the file has a link reference definition"),
+            ("Really\n===\nnever.", "the section has a line of only `=` or `-` under a line of text"),
+        ]:
+            with self.subTest(added=added):
+                shutil.copy(ROOT / "AGENTS.md", self.repo / "AGENTS.md")
+                self.restore()
+                self.edit("AGENTS.md", r"^(?=1\. Open your pull request as a draft)", f"{added}\n\n")
+                self.guide("ask-dax-dont-guess", "`Really never.` `Never mark it ready for review.`")
+                self.assertEqual(
+                    [
+                        f"{GUIDES}ask-dax-dont-guess: quotes `Really never.`, which the check "
+                        f"can't find in AGENTS.md `## Ask Dax, don't guess`: {clause}, "
+                        "which the check does not read"
+                    ],
+                    self.problems("ask-dax-dont-guess"),
+                )
+
     # statedIn is a file inside this repository, compared by what it resolves to.
 
     def test_a_stated_in_path_outside_the_repository_fails(self) -> None:
