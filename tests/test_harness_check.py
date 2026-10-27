@@ -572,5 +572,64 @@ class GuideTextTest(unittest.TestCase):
                 self.assertIn("which is not UTF-8 text", out.getvalue())
 
 
+CONTROLS = "urn:iki:harness:starter:control:"
+
+
+class ControlCodeTest(unittest.TestCase):
+    """A control's enforcedAt names a file inside this repository, compared by what it
+    resolves to, as a guide's statedIn is (ikigai-slack#193)."""
+
+    def setUp(self) -> None:
+        self.tmp = tempfile.TemporaryDirectory()
+        self.outside = Path(self.tmp.name)
+        self.repo = self.outside / "repo"
+        shutil.copytree(ROOT, self.repo, ignore=shutil.ignore_patterns(".git", "target"))
+        self.assertEqual([], harness.check(self.repo), "the copy agrees before it is changed")
+        (self.outside / "x").mkdir()
+        shutil.copy(self.repo / ".github/workflows/ci.yml", self.outside / "x" / "ci.yml")
+
+    def tearDown(self) -> None:
+        self.tmp.cleanup()
+
+    def enforced_at(self, where: str) -> list[str]:
+        """Point the copy's ctl:ci-checks at `where`, and check: the problems it is named in."""
+        path = self.repo / ".gonk/harness/harness.ttl"
+        text = path.read_text(encoding="utf-8")
+        start = text.index("ctl:ci-checks a harness:Control ;\n")
+        end = text.index(" .\n", start)
+        block = text[start:end]
+        self.assertIn('harness:enforcedAt ".github/workflows/ci.yml"', block)
+        block = block.replace('harness:enforcedAt ".github/workflows/ci.yml"', f'harness:enforcedAt "{where}"')
+        path.write_text(text[:start] + block + text[end:], encoding="utf-8")
+        return [p for p in harness.check(self.repo) if p.startswith(CONTROLS + "ci-checks:")]
+
+    def test_an_enforced_at_path_outside_the_repository_fails(self) -> None:
+        where = "../x/ci.yml"
+        self.assertEqual(
+            [f"{CONTROLS}ci-checks: enforcedAt {where}, and {where} is outside this repository"],
+            self.enforced_at(where),
+        )
+
+    def test_an_absolute_enforced_at_path_is_not_relative_to_the_repository(self) -> None:
+        # Refused whether it names a file outside the repository or inside, as statedIn is.
+        for where in (str(self.outside / "x" / "ci.yml"), str(self.repo / ".github/workflows/ci.yml")):
+            with self.subTest(where=where):
+                shutil.copy(ROOT / ".gonk/harness/harness.ttl", self.repo / ".gonk/harness/harness.ttl")
+                self.assertEqual(
+                    [
+                        f"{CONTROLS}ci-checks: enforcedAt {where}, and {where} "
+                        "is not a path relative to this repository's root"
+                    ],
+                    self.enforced_at(where),
+                )
+
+    def test_an_enforced_at_file_that_is_not_here_still_fails(self) -> None:
+        where = ".github/workflows/nowhere.yml"
+        self.assertEqual(
+            [f"{CONTROLS}ci-checks: enforcedAt {where}, and {where} is not in this repository"],
+            self.enforced_at(where),
+        )
+
+
 if __name__ == "__main__":
     unittest.main()
