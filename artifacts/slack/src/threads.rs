@@ -356,8 +356,8 @@ fn parse(text: &str) -> io::Result<BTreeMap<(String, String), Thread>> {
         .map(|line| {
             let fields: Vec<&str> = line.split('\t').collect();
             match fields.as_slice() {
-                // The line's timestamp is held to the shape record holds a new one to.
-                [key, channel, ts] if is_slack_ts(ts) => Ok((
+                // The line's key and timestamp are held to the shapes record holds new ones to.
+                [key, channel, ts] if check_key(key).is_ok() && is_slack_ts(ts) => Ok((
                     slot(channel, key),
                     Thread {
                         channel: (*channel).to_owned(),
@@ -792,6 +792,16 @@ mod tests {
         drop(threads);
         let after = Threads::open(&dir, "C1", FakeSlack::new()).unwrap();
         assert!(after.exists(&all(), "other").unwrap());
+    }
+
+    #[test]
+    fn a_map_line_whose_key_is_not_a_key_is_refused_on_open() {
+        let long = "k".repeat(crate::MAX_KEY_LEN + 1);
+        for (n, bad) in ["", "a key", "café", long.as_str()].iter().enumerate() {
+            let dir = legacy_dir(&format!("bad-key-line-{n}"), &format!("{bad}\tC1\t1700000100.000001\n"));
+            let err = Threads::open(&dir, "C1", FakeSlack::new()).err().unwrap();
+            assert_eq!(err.kind(), io::ErrorKind::InvalidData, "{bad:?}");
+        }
     }
 
     #[test]
