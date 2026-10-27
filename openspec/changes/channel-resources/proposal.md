@@ -44,55 +44,72 @@ and names the task that makes it true, or says that no task does yet.
 |---|---|---|---|
 | the declared channels | `SLACK_CHANNELS`, with `SLACK_CHANNEL_{NAME}_ID` and `…_SPEAKERS` | data | the host's `door.env` (D5). The list is the only authority on which channels exist; no code names one (D1) |
 | channel | `urn:slack:channel:{name}` | corridor, and a Sink edge | the scope every name below sits in: its Slack id, its speakers, its inbox and its capabilities. Sinking text posts a top-level message that belongs to no thread (D2). It has no Source |
-| every other name under a channel | `urn:slack:channel:{rest}` | code: the catch-all handler (`ChannelEndpoint`) | bound after the thread, reaction and inbox templates, so it answers whatever they do not. It takes the channel's name as the first segment of `rest`, refuses an undeclared one as `no-channel` on every verb before Slack is called, serves the channel's Sink and the reaction's Sink and Delete, refuses `…:thread:` with an empty key as `bad-key`, and answers NotFound "not served yet" for any other name. See the kept-code line |
+| every other name under a channel | `urn:slack:channel:{rest}` | code: the catch-all handler (`ChannelEndpoint`, in its second binding) | `ChannelEndpoint` is bound twice in `serve.rs`: first on the reaction template (the reaction row), and last, as the catch-all, after the thread and inbox templates, so it answers whatever the three narrower templates do not. Here it takes the channel's name as the first segment of `rest`, refuses an undeclared one as `no-channel` on every verb before Slack is called, serves the channel's Sink, refuses `…:thread:` with an empty key as `bad-key`, and answers NotFound "not served yet" for any other name, and for any other verb on the channel. See the kept-code line |
 | thread map line | `key TAB channel TAB ts` in `threads.tsv` | ATOM, internal | the key's channel and opening message, the door's only state about a thread. Not a name of its own: reached only through the thread |
 | thread | `urn:slack:channel:{name}:thread:{key}` | code: a handler (`ChannelThreadEndpoint`), with Source, Sink and Exists | Source reads Slack's replies to the map line's opening message through the transport, as JSON that carries each author's Slack user id (a bot's `bot_id` for a bot message) and UTC times, and no channel id or message timestamp. Sink posts a reply, or opens the thread when the key has no line (D2). Exists answers from the map. Not a tiny function: see the kept-code line |
-| minted key | `m-<seconds>-<micros>` | mapping rule | a speaker's top-level message becomes a thread under a key computed from its Slack timestamp (D3); the only state is the map line it writes, through `Threads::adopt`, from the inbox filter |
-| reaction | `…:thread:{key}:reaction:{reaction}` | Sink and Delete edges | add or remove the reaction on the thread's opening message, found through the map line. Nothing is stored; Slack holds the reaction. No Source, and no body: served by the catch-all |
+| minted key | `m-<seconds>-<micros>` | code: a function (`mint_key`), run by the inbox filter | a speaker's top-level message becomes a thread under a key that is its Slack timestamp with `.` changed to `-`, after `m-` (D3): `mint_key` rewrites the string, inside `Inbox::deliver_to`, and only a timestamp of Slack's shape whose key passes `check_key` gets one. The only state is the map line it writes, through `Threads::adopt`. The key, and so the timestamp, is then in the thread's name and in the inbox tuple's `slack:key`. Not a mapping rule: see the kept-code line |
+| reaction | `…:thread:{key}:reaction:{reaction}` | Sink and Delete edges | add or remove the reaction on the thread's opening message, found through the map line. Nothing is stored; Slack holds the reaction. No Source, and no body. Served by `ChannelEndpoint` in its first binding, on this template, bound before the thread's so the thread's `{key}` cannot swallow `:reaction:…`; the catch-all never sees a reaction. Any other verb here is NotFound "not served yet" |
 | inbox | `urn:slack:channel:{name}:inbox` | code: a handler (`InboxEndpoint`) over an ATOM | rewrites the request onto the intray space `urn:space:{name}`, which holds the channel's undelivered tuples, after checking the channel is declared. As built it passes the caller's capability through to the space; task 4.1 makes Source and Delete require `urn:cap:slack:channel:{name}:read` at this name (specs/inbox, "Reading an inbox needs the channel's capability"). Not an alias rule: see the kept-code line |
 | inbox tuple | a `slack:Message` or `slack:Reaction` blank node | code: string building (`turtle`) | one Turtle tuple per delivery, built in code from the event and the key the map gives it, with the author's Slack user id as `slack:user`; a host matches it with SPARQL. No template resource exists; see Open |
 | delivered events | `delivered.txt` in the state directory | ATOM, internal | the ids of events already delivered, so a redelivery lands once across restarts. Not a name |
 | capability | `urn:cap:slack:channel:{name}:read`, `…:post`, `…:react` | names, not resources | exact strings the door will check per request, before Slack is called (D4). Pending task 4.1: as built the door checks the three global strings `urn:cap:slack:read`, `…:post` and `…:react` on every channel |
-| old threads (D6) | a line's channel id, matched to a declared channel's name on each request | mapping rule | an old line is served under the channel name its id now has: `threads.tsv` is parsed at start keyed by channel id, and `Threads::id_of` turns the name a request carries into its id against the configuration, per request. Nothing is rewritten, no code runs at start beyond parsing, and a line for an undeclared channel is kept and served by no name |
+| old threads (D6) | a line's channel id, matched to a declared channel's name on each request | code: a lookup (`Threads::id_of`), per request | an old line is served under the channel name its id now has: `threads.tsv` is parsed at start keyed by channel id, and `Threads::id_of` turns the name a request carries into its id against the configuration, per request. Nothing is rewritten, no code runs at start beyond parsing, and a line for an undeclared channel is kept and served by no name. Not a mapping rule: see the kept-code line |
+
+**Not needed:** a temporal space, because Slack is the record and the door keeps no history
+of its own; a personal space, because what a caller may see is its capability set, not a view
+over the shared names; templates and views, because the door renders nothing for a person and
+Slack is the only UI; a list of a channel's threads, because this change reaches a thread only
+by its key (see Open).
 
 **Corridors.** A channel is the corridor: `urn:slack:channel:{name}` binds, from the host's
 configuration, the Slack id requests go to, the speakers the inbox admits, the intray space
 deliveries land in and the capability strings that gate the verbs. Nothing threads a channel
 argument through the endpoints; the name carries it. A client's mount
 (`urn:sd:` from Dax's kernel, see Impact) is a corridor over the whole space that the door
-never sees. There is no temporal space: Slack is the record. The inbox spec requires a
-thread's resource to be cut when a speaker's message lands in it, so a cached read is never
-stale; nothing under `artifacts/` makes that cut yet, and no task names it. Reads are fresh
-today only because nothing caches them. There is no personal space: what a caller may see
-is its capability set, not a view.
+never sees. The inbox spec requires a thread's resource to be cut when a speaker's message
+lands in it, so a cached read is never stale; nothing under `artifacts/` makes that cut yet,
+and no task names it. Reads are fresh today only because nothing caches them.
 
 **Sealed.** The old `urn:slack:thread:{key}`, `urn:slack:thread:{key}:reaction:{name}` and
 `urn:cap:slack:{read,post,react}` are to be answered by nothing, with no alias (see
 Variances). As built, `serve.rs` still binds both old names and checks the global
 capabilities. Task 4.1 removes the global capabilities; no task yet removes the old thread
 and reaction bindings or writes the fitness function `design.md` names, which will keep them
-out of `artifacts/` once it exists. Slack's channel ids and message timestamps never appear
-in a name or a representation: a channel is named by the host's name, a thread by its key,
-and a time is UTC. Slack's user ids are carried: the conversation's JSON and the inbox
-tuple's `slack:user` both give the author's Slack user id, and a bot message's `bot_id` in
-its place, because that id is how a caller tells speakers apart. Any name under a channel
-the host did not declare is refused as `no-channel` before Slack is called.
+out of `artifacts/` once it exists. Slack's channel ids never appear in a name or a
+representation: a channel is named by the host's name, and a thread's JSON carries no
+channel. A message timestamp appears in one place, by design (D3): a minted key is its
+opening message's Slack timestamp, `m-<seconds>-<micros>`, so the timestamp is in that
+thread's name and in the inbox tuple's `slack:key`. Nowhere else: a caller's key is the
+caller's own, a thread's JSON gives UTC times and no timestamp, and the map line that holds
+every opening message's timestamp is not a name. Slack's user ids are carried: the
+conversation's JSON and the inbox tuple's `slack:user` both give the author's Slack user id,
+and a bot message's `bot_id` in its place, because that id is how a caller tells speakers
+apart. Any name under a channel the host did not declare is refused as `no-channel` before
+Slack is called.
 
 **Faces.** A thread sources as `application/json`, one object per message. The inbox's
 tuples are Turtle, the intray space's own face. The channel's and the thread's Sinks take
 `text/plain`, as `content` or as `in` when piped. The reaction's Sink takes no body: text
-sent with it is ignored. The inbox's Sink takes a Turtle tuple, forwarded to the space.
-There are no templates and no views: the door renders nothing for a person, and Slack is
-the only UI.
+sent with it is ignored. The inbox's Sink takes a Turtle tuple, forwarded to the space as
+the bytes it came as: nothing in the door or the space checks that they are Turtle. Templates
+and views: see Not needed.
 
-**Errors.** `bad-key` (an empty key included), `bad-reaction` and an empty or over-long
-text are InvalidArgument; a Sink to the channel or a thread with no text is
-MissingArgument(`content`); `no-thread`, `no-channel` and any other name under a declared
-channel ("not served yet") are NotFound; a missing capability is Denied; Slack throttling or
-being unreachable is Unavailable, with Slack's retry-after when it gives one. Endpoint
-carries the rest: a rejection from Slack such as `not_in_channel` or a bad token, a failure
-to save the map or a timestamp from Slack of a shape the map cannot hold, a verb a name does
-not take, and a poisoned map lock.
+**Errors.** For the Slack names: `bad-key` (an empty key included), `bad-reaction` and an
+empty or over-long text are InvalidArgument; a Sink with no text, to the channel, a thread
+or the inbox, is MissingArgument(`content`), the inbox's because its handler reads the text
+itself before forwarding; `no-thread` and `no-channel` are NotFound, and so is the
+catch-all's "not served yet", for any other name under a declared channel and for a verb the
+channel or the reaction does not take (Source, Exists or Delete on the channel, Source or
+Exists on a reaction, whose message names only the channel); a missing capability is Denied;
+Slack throttling or being unreachable is Unavailable, with Slack's retry-after when it gives
+one. Endpoint carries the rest: a rejection from Slack such as `not_in_channel` or a bad
+token, a failure to save the map or a timestamp from Slack of a shape the map cannot hold, a
+verb the thread does not take (Delete), and a poisoned map lock. The inbox's other refusals
+are the intray space's own, passed through unchanged: Denied for a caller without the space's
+`urn:cap:space:out`, `…:read` (or `…:read:{name}`) or `…:take`; NotFound for an empty
+space, a `match` nothing fits, or a tuple id that is gone; InvalidArgument for a bad `match`
+or `retry` argument; and Endpoint for Exists or any other verb the space does not take, and
+for a failure in the space's files.
 
 **Code the change keeps**, one line each on why it cannot be a composition, or saying
 plainly that it could and is not yet:
@@ -126,7 +143,20 @@ plainly that it could and is not yet:
   template has no notion of a declared set of values; the set itself is data, from the
   configuration. One template has to answer every name under a channel the narrower
   templates do not bind, so the channel check (`no-channel`) and the "not served yet"
-  refusal live there, and it splits `rest` on `:` in code to find the channel's name.
+  refusal live there, and it splits `rest` on `:` in code to find the channel's name. The
+  same handler is bound a first time on the reaction template, where the kernel binds
+  `name`, `key` and `reaction` and it serves the reaction's Sink and Delete: one handler,
+  two bindings, so the reaction's channel check is the catch-all's.
+- The minted key (`mint_key`) is code, not a mapping rule, because the kernel has nothing to
+  map: the message it names arrives as a Socket Mode event inside the inbox filter, not as a
+  resource, and the rule is guarded (only a timestamp of Slack's shape, whose key passes
+  `check_key` and which `Threads::adopt` accepts, gets one). The rewrite itself, `.` to `-`
+  after `m-`, could be a rule the day a message is a name; this change does not make it one.
+- The old-threads lookup (`Threads::id_of`) is code, not a mapping rule, because the Slack
+  channel id it maps a name to is sealed: it never appears in a name, so an alias has no
+  name to map onto, and the lookup runs behind the thread's name, where the transport is
+  called. A kernel alias table could carry name to id as data if the id were a name; the
+  design keeps it out.
 
 **Open.** Compositions the design does not decide, left open rather than invented:
 
