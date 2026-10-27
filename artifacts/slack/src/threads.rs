@@ -349,7 +349,8 @@ fn parse(text: &str) -> io::Result<BTreeMap<(String, String), Thread>> {
         .map(|line| {
             let fields: Vec<&str> = line.split('\t').collect();
             match fields.as_slice() {
-                [key, channel, ts] => Ok((
+                // The line's timestamp is held to the shape record holds a new one to.
+                [key, channel, ts] if is_slack_ts(ts) => Ok((
                     slot(channel, key),
                     Thread {
                         channel: (*channel).to_owned(),
@@ -765,6 +766,15 @@ mod tests {
             let err = threads.adopt(bad, "k", "1700000100.000001").unwrap_err();
             assert_eq!(err.kind(), io::ErrorKind::InvalidData, "{bad:?}");
             assert!(!dir.join(MAP_FILE).exists(), "{bad:?}");
+        }
+    }
+
+    #[test]
+    fn a_map_line_whose_timestamp_is_of_another_shape_is_refused_on_open() {
+        for (n, bad) in ["abc", "1.2.3", "", "1700000100.000001 "].iter().enumerate() {
+            let dir = legacy_dir(&format!("bad-line-{n}"), &format!("k\tC1\t{bad}\n"));
+            let err = Threads::open(&dir, "C1", FakeSlack::new()).err().unwrap();
+            assert_eq!(err.kind(), io::ErrorKind::InvalidData, "{bad:?}");
         }
     }
 
