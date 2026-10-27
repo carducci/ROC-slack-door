@@ -61,10 +61,16 @@ def make_only_windows_names(test: unittest.TestCase) -> None:
 
     It guards the calls Python makes a name through (ikigai-slack#240): `open` and `io.open`
     in a mode that can create (w, x or a), `os.open` with O_CREAT, `os.mkdir`, `os.symlink`,
-    `os.link`, `os.rename` and `os.replace`. Through them it guards Path's mkdir, touch, open,
-    write_text, write_bytes, symlink_to, hardlink_to, rename and replace, `os.makedirs`,
-    shutil's copy, copy2, copyfile, move and copytree (every name copytree makes), and
-    tempfile. It does not guard os.mknod, os.mkfifo, or a name a subprocess makes."""
+    `os.link`, `os.rename` and `os.replace`, and on Windows `_winapi.CopyFile2`, which from
+    Python 3.12 `shutil.copy2` calls instead of copyfile and open (ikigai-slack#245). Through
+    them it guards Path's mkdir, touch, open, write_text, write_bytes, symlink_to, hardlink_to,
+    rename, replace, and from 3.14 copy and move (whose Windows copy is CopyFile2 too, read
+    from the same module), `os.makedirs`, shutil's copy, copy2, copyfile, move and copytree
+    (every name copytree makes), and tempfile. It does not guard os.mknod, os.mkfifo, or a
+    name a subprocess makes.
+
+    It refuses as Windows refuses, with an OSError whose winerror is ERROR_INVALID_NAME (123)
+    and errno EINVAL, since copy2 reads the winerror of what CopyFile2 raises."""
 
     def guard(make, made: Callable[[tuple, dict], object]):
         # made: what the call makes, or None when it makes nothing.
@@ -73,7 +79,11 @@ def make_only_windows_names(test: unittest.TestCase) -> None:
             if target is not None and not isinstance(target, int):
                 part = windows_refuses(target)
                 if part is not None:
-                    raise OSError(f"Windows can't name {part!r}, in {os.fsdecode(target)}")
+                    text = os.fsdecode(target)
+                    error = OSError(errno.EINVAL, f"Windows can't name {part!r}", text, 123)
+                    if not hasattr(error, "winerror"):  # only Windows keeps the fourth argument
+                        error.winerror = 123
+                    raise error
             return make(*args, **kwargs)
 
         return guarded
@@ -89,6 +99,9 @@ def make_only_windows_names(test: unittest.TestCase) -> None:
         creates = arg(args, kwargs, 1, "flags", 0) & os.O_CREAT
         return arg(args, kwargs, 0, "path") if creates else None
 
+    # shutil holds _winapi on Windows and None elsewhere; a test may stand one in to model
+    # Windows. On Windows it is the module pathlib._os reads CopyFile2 from too.
+    winapi = getattr(shutil, "_winapi", None)
     for owner, name, made in (
         (builtins, "open", opened),
         (io, "open", opened),
@@ -96,6 +109,8 @@ def make_only_windows_names(test: unittest.TestCase) -> None:
         (os, "mkdir", lambda args, kwargs: arg(args, kwargs, 0, "path")),
         *((os, name, lambda args, kwargs: arg(args, kwargs, 1, "dst"))
           for name in ("symlink", "link", "rename", "replace")),
+        *([(winapi, "CopyFile2", lambda args, kwargs: arg(args, kwargs, 1, "new_file_name"))]
+          if hasattr(winapi, "CopyFile2") else []),
     ):
         patcher = mock.patch.object(owner, name, guard(getattr(owner, name), made))
         patcher.start()
