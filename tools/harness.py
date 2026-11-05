@@ -95,6 +95,8 @@ VOCAB_FILE = Path(".gonk") / "harness" / "vocabulary.ttl"
 FIRINGS_FILE = Path(".gonk") / "state" / "harness" / "firings.log"
 
 ID = re.compile(r"\A[a-z][a-z0-9]*(?:-[a-z0-9]+)*\Z")
+# A recipe's name, just's NAME (casey/just GRAMMAR.md).
+JUST_NAME = re.compile(r"[A-Za-z_][A-Za-z0-9_-]*")
 BARE = re.compile(r"\A[A-Za-z0-9._-]{1,64}\Z")
 KINDS = {"refusal": "harness:Refusal", "warning": "harness:Warning"}
 VERSION_LINE = "# ikigai-log v1"
@@ -663,25 +665,50 @@ def _emitters_in(tree: ast.AST, rel: str):
     return found, bad
 
 
-def undefined_in(path: Path, name: str) -> str | None:
-    """None when `name` is defined in `path`, else why not: it has no such name, or it can't be
-    read, worded as read_sections words it (ikigai-slack#264)."""
-    if name == "<module>":
-        return None
-    try:
-        text = path.read_text(encoding="utf-8")
-    except UnicodeDecodeError:
-        return "is not UTF-8 text"
-    except OSError as e:
-        return f"can't be read ({e.strerror})"
+def undefined_in(path: Path, cited: str, name: str) -> str | None:
+    """None when `name` is defined in `path` (written `cited`), else why not: a def or class of
+    a .py file (`<module>` for its module-level code), a recipe of a justfile. A file of any
+    other kind has no grammar the check reads names by, so a name there is refused, never
+    matched as a substring (ikigai-slack#261). A name that is not one in the file's grammar is
+    refused before it is looked for, so spaces or a line's fragment can't match (ikigai-slack#278)."""
     if path.suffix == ".py":
-        pattern = rf"^\s*(?:async\s+)?(?:def|class)\s+{re.escape(name)}\b"
-        found = re.search(pattern, text, re.M) is not None
-    elif path.name == "justfile":
-        found = re.search(rf"^{re.escape(name)}\b[^:=\n]*:(?!=)", text, re.M) is not None
+        if name == "<module>":
+            return None
+        if not name.isidentifier():
+            return f"{cited}: {name!r} is not an identifier of a .py file, or <module>"
+        try:
+            source = path.read_bytes()
+        except OSError as e:
+            return f"{cited} can't be read ({e.strerror})"
+        try:
+            tree = ast.parse(source, cited)
+        except (SyntaxError, ValueError, MemoryError, RecursionError) as e:
+            # Source too deep for the parser raises MemoryError or RecursionError, not SyntaxError.
+            return f"{cited} can't be parsed ({e})"
+        kinds = ast.FunctionDef | ast.AsyncFunctionDef | ast.ClassDef
+        found = any(isinstance(n, kinds) and n.name == name for n in ast.walk(tree))
+    elif path.name.lower() in ("justfile", ".justfile") or path.suffix.lower() == ".just":
+        # just finds `justfile` in any case, and `.justfile`, and loads a module from `<name>.just`.
+        if not JUST_NAME.fullmatch(name):
+            return f"{cited}: {name!r} is not a recipe name of a justfile ([A-Za-z_][A-Za-z0-9_-]*)"
+        try:
+            text = path.read_text(encoding="utf-8")
+        except UnicodeDecodeError:
+            return f"{cited} is not UTF-8 text"
+        except OSError as e:
+            return f"{cited} can't be read ({e.strerror})"
+        # A recipe's line: its whole name (`-` is part of one), then parameters, then a colon
+        # that is not the start of `:=`. Any colon not followed by `=` ends the match, one in a
+        # default too; quoted strings are skipped whole only so a `:=` inside one is not taken
+        # for an assignment (`dq x="a:=b":` is a recipe).
+        recipe = rf"^@?{re.escape(name)}(?![\w-])(?:[^:'\"\n]|'[^'\n]*'|\"[^\"\n]*\")*:(?!=)"
+        found = re.search(recipe, text, re.M) is not None
     else:
-        found = name in text
-    return None if found else f"has no {name}"
+        return (
+            f"a name can't be checked in {cited}: name a function of a .py file or a recipe of "
+            "a justfile, or cite the file alone"
+        )
+    return None if found else f"{cited} has no {name}"
 
 
 def check(repo: Path) -> list[str]:
@@ -748,14 +775,16 @@ def check(repo: Path) -> list[str]:
         for where in g.values(s, H + "enforcedAt"):
             if not is_local(where):
                 continue
-            path, _, name = where.partition("#")
+            path, hashed, name = where.partition("#")
             file, why = repo_file(root, path)
             if file is None:
                 # An empty path is seen only quoted, and named as what it is (ikigai-slack#234).
                 cited, named = (repr(where), "its path") if not path else (where, path)
                 bad.append(f"{s.value}: enforcedAt {cited}, and {named} {why}")
-            elif name and (why := undefined_in(file, name)):
-                bad.append(f"{s.value}: enforcedAt {where}, and {path} {why}")
+            elif hashed and not name:
+                bad.append(f"{s.value}: enforcedAt {where}, which names no function after #")
+            elif name and (why := undefined_in(file, path, name)):
+                bad.append(f"{s.value}: enforcedAt {where}, and {why}")
         if fires_into_log(g, s) and not g.values(s, H + "firedBy"):
             bad.append(
                 f"{s.value}: a sensor that writes firings names a test that fires it "
