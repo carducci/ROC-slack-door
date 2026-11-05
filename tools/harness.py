@@ -624,7 +624,15 @@ def emissions(repo: Path) -> tuple[list[tuple[str, str, str]], list[str]]:
     for top in CODE_ROOTS:
         for path in sorted((repo / top).rglob("*.py")):
             rel = path.relative_to(repo).as_posix()
-            tree = ast.parse(path.read_text(encoding="utf-8"), rel)
+            try:
+                text = path.read_text(encoding="utf-8")
+            except UnicodeDecodeError:
+                bad.append(f"{rel} is not UTF-8 text")
+                continue
+            except OSError as e:
+                bad.append(f"{rel} can't be read ({e.strerror})")
+                continue
+            tree = ast.parse(text, rel)
             found_here, bad_here = _emitters_in(tree, rel)
             found += found_here
             bad += bad_here
@@ -669,7 +677,11 @@ def undefined_in(path: Path, cited: str, name: str) -> str | None:
         if not name.isidentifier():
             return f"{cited}: {name!r} is not an identifier of a .py file, or <module>"
         try:
-            tree = ast.parse(path.read_bytes(), cited)
+            source = path.read_bytes()
+        except OSError as e:
+            return f"{cited} can't be read ({e.strerror})"
+        try:
+            tree = ast.parse(source, cited)
         except (SyntaxError, ValueError, MemoryError, RecursionError) as e:
             # Source too deep for the parser raises MemoryError or RecursionError, not SyntaxError.
             return f"{cited} can't be parsed ({e})"
@@ -679,7 +691,12 @@ def undefined_in(path: Path, cited: str, name: str) -> str | None:
         # just finds `justfile` in any case, and `.justfile`, and loads a module from `<name>.just`.
         if not JUST_NAME.fullmatch(name):
             return f"{cited}: {name!r} is not a recipe name of a justfile ([A-Za-z_][A-Za-z0-9_-]*)"
-        text = path.read_text(encoding="utf-8")
+        try:
+            text = path.read_text(encoding="utf-8")
+        except UnicodeDecodeError:
+            return f"{cited} is not UTF-8 text"
+        except OSError as e:
+            return f"{cited} can't be read ({e.strerror})"
         # A recipe's line: its whole name (`-` is part of one), then parameters, then a colon
         # that is not the start of `:=`. Any colon not followed by `=` ends the match, one in a
         # default too; quoted strings are skipped whole only so a `:=` inside one is not taken
