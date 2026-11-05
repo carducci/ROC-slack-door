@@ -1230,6 +1230,82 @@ class ControlCodeTest(unittest.TestCase):
                 expected = [] if ok else [f"{CONTROLS}ci-checks: enforcedAt {where}, and {path} has no {name}"]
                 self.assertEqual(expected, self.enforced_at(where))
 
+    def test_a_name_that_is_no_recipe_name_or_identifier_is_refused(self) -> None:
+        # ikigai-slack#278: a name of spaces matched a body line's indent, and a name with a
+        # trailing space or a recipe line's start matched a recipe with parameters.
+        (self.repo / ".github/justfile").write_text(
+            "real arg=`a:=b`:\n    echo hi: there\n\ninit *flags:\n    echo\n\n# x\nnext:\n    echo\n"
+        )
+        (self.repo / ".github/x.py").write_text("def real():\n    pass\n")
+        just = "is not a recipe name of a justfile ([A-Za-z_][A-Za-z0-9_-]*)"
+        py = "is not an identifier of a .py file, or <module>"
+        for where, path, name, why in (
+            (".github/justfile#   ", ".github/justfile", "   ", just),
+            (".github/justfile#init ", ".github/justfile", "init ", just),
+            (".github/justfile#    echo hi", ".github/justfile", "    echo hi", just),
+            (".github/justfile#init *flags", ".github/justfile", "init *flags", just),
+            (".github/justfile## x\nnext", ".github/justfile", "# x\nnext", just),
+            (".github/justfile#-real", ".github/justfile", "-real", just),
+            (".github/justfile#next\n", ".github/justfile", "next\n", just),
+            (".github/x.py#real ", ".github/x.py", "real ", py),
+            (".github/x.py#def real", ".github/x.py", "def real", py),
+        ):
+            with self.subTest(where=where):
+                shutil.copy(ROOT / ".gonk/harness/harness.ttl", self.repo / ".gonk/harness/harness.ttl")
+                self.assertEqual(
+                    [f"{CONTROLS}ci-checks: enforcedAt {where}, and {path}: {name!r} {why}"],
+                    self.enforced_at(where),
+                )
+
+    def test_every_file_name_just_reads_is_a_justfile(self) -> None:
+        # ikigai-slack#278: just finds `justfile` in any case and `.justfile`, and loads a
+        # module from `<name>.just`; a recipe cited in any of them is a recipe.
+        for file in ("Justfile", ".justfile", "JUSTFILE", "m.just"):
+            (self.repo / ".github" / file).write_text("build:\n    echo\n")
+            for name, ok in (("build", True), ("buil", False)):
+                where = f".github/{file}#{name}"
+                with self.subTest(where=where):
+                    shutil.copy(ROOT / ".gonk/harness/harness.ttl", self.repo / ".gonk/harness/harness.ttl")
+                    expected = [] if ok else [f"{CONTROLS}ci-checks: enforcedAt {where}, and .github/{file} has no {name}"]
+                    self.assertEqual(expected, self.enforced_at(where))
+
+    def test_a_quoted_default_may_hold_a_colon_equals(self) -> None:
+        # ikigai-slack#278: only a quoted `:=` needs the quote branch; an unquoted one ends the
+        # recipe line's search, as just reads it as an assignment.
+        (self.repo / ".github/justfile").write_text(
+            "dq x=\"a:=b\":\n    echo\n\nsq y='a:=b':\n    echo\n\nbare := \"x\"\n"
+        )
+        for where, ok in (
+            (".github/justfile#dq", True),
+            (".github/justfile#sq", True),
+            (".github/justfile#bare", False),
+        ):
+            with self.subTest(where=where):
+                shutil.copy(ROOT / ".gonk/harness/harness.ttl", self.repo / ".gonk/harness/harness.ttl")
+                path, _, name = where.partition("#")
+                expected = [] if ok else [f"{CONTROLS}ci-checks: enforcedAt {where}, and {path} has no {name}"]
+                self.assertEqual(expected, self.enforced_at(where))
+
+    def test_a_class_and_an_async_def_are_defined(self) -> None:
+        (self.repo / ".github/x.py").write_text("class Thing:\n    pass\n\n\nasync def wait():\n    pass\n")
+        for where in (".github/x.py#Thing", ".github/x.py#wait"):
+            with self.subTest(where=where):
+                shutil.copy(ROOT / ".gonk/harness/harness.ttl", self.repo / ".gonk/harness/harness.ttl")
+                self.assertEqual([], self.enforced_at(where))
+
+    def test_a_py_file_that_cannot_be_parsed_is_said_so(self) -> None:
+        # ikigai-slack#278: a SyntaxError, and a source too deep for the parser, which raises
+        # MemoryError (or RecursionError), not SyntaxError, and crashed the check.
+        for source in ("def a(:\n", "x = " + "-" * 100000 + "1\n\n\ndef a():\n    pass\n"):
+            with self.subTest(source=source[:12]):
+                (self.repo / ".github/x.py").write_text(source)
+                shutil.copy(ROOT / ".gonk/harness/harness.ttl", self.repo / ".gonk/harness/harness.ttl")
+                [problem] = self.enforced_at(".github/x.py#a")
+                self.assertTrue(
+                    problem.startswith(f"{CONTROLS}ci-checks: enforcedAt .github/x.py#a, and .github/x.py can't be parsed ("),
+                    problem,
+                )
+
     @unittest.skipIf(os.name == "nt", "a mode of 000 stops nothing on Windows")
     @unittest.skipIf(getattr(os, "geteuid", lambda: 1)() == 0, "root reads a mode-000 directory")
     def test_an_enforced_at_under_a_directory_that_cannot_be_searched_cannot_be_read(self) -> None:
