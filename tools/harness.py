@@ -95,6 +95,8 @@ VOCAB_FILE = Path(".gonk") / "harness" / "vocabulary.ttl"
 FIRINGS_FILE = Path(".gonk") / "state" / "harness" / "firings.log"
 
 ID = re.compile(r"\A[a-z][a-z0-9]*(?:-[a-z0-9]+)*\Z")
+# A recipe's name, just's NAME (casey/just GRAMMAR.md).
+JUST_NAME = re.compile(r"[A-Za-z_][A-Za-z0-9_-]*")
 BARE = re.compile(r"\A[A-Za-z0-9._-]{1,64}\Z")
 KINDS = {"refusal": "harness:Refusal", "warning": "harness:Warning"}
 VERSION_LINE = "# ikigai-log v1"
@@ -659,20 +661,29 @@ def undefined_in(path: Path, cited: str, name: str) -> str | None:
     """None when `name` is defined in `path` (written `cited`), else why not: a def or class of
     a .py file (`<module>` for its module-level code), a recipe of a justfile. A file of any
     other kind has no grammar the check reads names by, so a name there is refused, never
-    matched as a substring (ikigai-slack#261)."""
+    matched as a substring (ikigai-slack#261). A name that is not one in the file's grammar is
+    refused before it is looked for, so spaces or a line's fragment can't match (ikigai-slack#278)."""
     if path.suffix == ".py":
         if name == "<module>":
             return None
+        if not name.isidentifier():
+            return f"{cited}: {name!r} is not an identifier of a .py file, or <module>"
         try:
             tree = ast.parse(path.read_bytes(), cited)
-        except (SyntaxError, ValueError) as e:
+        except (SyntaxError, ValueError, MemoryError, RecursionError) as e:
+            # Source too deep for the parser raises MemoryError or RecursionError, not SyntaxError.
             return f"{cited} can't be parsed ({e})"
         kinds = ast.FunctionDef | ast.AsyncFunctionDef | ast.ClassDef
         found = any(isinstance(n, kinds) and n.name == name for n in ast.walk(tree))
-    elif path.name == "justfile":
+    elif path.name.lower() in ("justfile", ".justfile") or path.suffix.lower() == ".just":
+        # just finds `justfile` in any case, and `.justfile`, and loads a module from `<name>.just`.
+        if not JUST_NAME.fullmatch(name):
+            return f"{cited}: {name!r} is not a recipe name of a justfile ([A-Za-z_][A-Za-z0-9_-]*)"
         text = path.read_text(encoding="utf-8")
         # A recipe's line: its whole name (`-` is part of one), then parameters, then a colon
-        # that is not the start of `:=`. A default may hold a colon, quoted.
+        # that is not the start of `:=`. Any colon not followed by `=` ends the match, one in a
+        # default too; quoted strings are skipped whole only so a `:=` inside one is not taken
+        # for an assignment (`dq x="a:=b":` is a recipe).
         recipe = rf"^@?{re.escape(name)}(?![\w-])(?:[^:'\"\n]|'[^'\n]*'|\"[^\"\n]*\")*:(?!=)"
         found = re.search(recipe, text, re.M) is not None
     else:
