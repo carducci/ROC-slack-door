@@ -1286,6 +1286,17 @@ class ControlCodeTest(unittest.TestCase):
                 expected = [] if ok else [f"{CONTROLS}ci-checks: enforcedAt {where}, and {path} has no {name}"]
                 self.assertEqual(expected, self.enforced_at(where))
 
+    def test_a_backtick_default_and_an_escaped_quote_may_hold_a_colon_equals(self) -> None:
+        # ikigai-slack#275: a backtick default is a quote kind too, and a double-quoted default
+        # may hold an escaped quote before its `:=`.
+        (self.repo / ".github/justfile").write_text(
+            'real arg=`a:=b`:\n    echo\n\nesc x="a\\"b:=c":\n    echo\n\nbt y=`a:b`:\n    echo\n'
+        )
+        for where in (".github/justfile#real", ".github/justfile#esc", ".github/justfile#bt"):
+            with self.subTest(where=where):
+                shutil.copy(ROOT / ".gonk/harness/harness.ttl", self.repo / ".gonk/harness/harness.ttl")
+                self.assertEqual([], self.enforced_at(where))
+
     def test_a_class_and_an_async_def_are_defined(self) -> None:
         (self.repo / ".github/x.py").write_text("class Thing:\n    pass\n\n\nasync def wait():\n    pass\n")
         for where in (".github/x.py#Thing", ".github/x.py#wait"):

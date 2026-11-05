@@ -700,8 +700,12 @@ def undefined_in(path: Path, cited: str, name: str) -> str | None:
         # A recipe's line: its whole name (`-` is part of one), then parameters, then a colon
         # that is not the start of `:=`. Any colon not followed by `=` ends the match, one in a
         # default too; quoted strings are skipped whole only so a `:=` inside one is not taken
-        # for an assignment (`dq x="a:=b":` is a recipe).
-        recipe = rf"^@?{re.escape(name)}(?![\w-])(?:[^:'\"\n]|'[^'\n]*'|\"[^\"\n]*\")*:(?!=)"
+        # for an assignment (`dq x="a:=b":` is a recipe). Backticks quote too, and a double
+        # quote may hold an escaped character (`esc x="a\"b:=c":`).
+        recipe = (
+            rf"^@?{re.escape(name)}(?![\w-])"
+            r"(?:[^:'\"`\n]|'[^'\n]*'|`[^`\n]*`|\"(?:[^\"\\\n]|\\.)*\")*:(?!=)"
+        )
         found = re.search(recipe, text, re.M) is not None
     else:
         return (
