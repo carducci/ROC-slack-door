@@ -1,0 +1,41 @@
+# Risk classes by path (review-once D5, ikigraph PR 266). The first glob that matches decides; a
+# path no glob matches is b. A change's class is the highest of its paths': class a gets two
+# adversarial reviews, b and c one. Globs are fnmatch: `*` crosses `/`. `tests` names where a
+# reviewer's failing tests go; `reviewer_email` tells the reviewer's commits apart.
+tests = ["tests/*", "artifacts/*/tests/*"]
+reviewer_email = "reviewer@tamariz.invalid"
+
+[[path]]
+glob = ".gonk/risk.toml"
+class = "a"
+why = "decides how hard everything else is reviewed"
+
+[[path]]
+glob = ".github/workflows/*"
+class = "a"
+why = "the merge gate"
+
+[[path]]
+glob = "hooks/claude/*"
+class = "a"
+why = "the claim guard"
+
+[[path]]
+glob = "worker/*"
+class = "a"
+why = "the loops' configuration"
+
+[[path]]
+glob = "artifacts/door/src/*"
+class = "a"
+why = "the door: capability gates and the Slack bot's token"
+
+[[path]]
+glob = "artifacts/*"
+class = "b"
+why = "the door's product behaviour"
+
+[[path]]
+glob = "*"
+class = "c"
+why = "tooling, tests, docs and specs"
