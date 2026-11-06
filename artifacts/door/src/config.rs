@@ -200,6 +200,23 @@ mod tests {
     }
 
     #[test]
+    fn white_space_around_an_id_is_trimmed_before_it_is_checked() {
+        for padded in ["\u{a0}C2", "C2\u{a0}", "\u{2028}C2", "\u{3000}C2", "C2\t", "\u{85}C2", " C2 "] {
+            let config = Config::resolve(&file_with(&format!("SLACK_CHANNEL_FIXME_ID={padded}\n")), no_env)
+                .unwrap_or_else(|e| panic!("{padded:?}: {e:?}"));
+            assert_eq!(config.channels[1].id, "C2", "{padded:?}");
+        }
+    }
+
+    #[test]
+    fn an_id_that_is_not_letters_and_digits_stops_the_start() {
+        for bad in ["C1-X", "C1#X", "C1.X", "C1:X", "C1_X", "c1", "C2 x", "C\u{a0}2", "\u{200b}C2", "C!2", "C/2"] {
+            let problem = only(refused(&file_with(&format!("SLACK_CHANNEL_FIXME_ID={bad}\n"))));
+            assert!(problem.contains("fixme") && problem.contains("SLACK_CHANNEL_FIXME_ID"), "{bad:?}: {problem}");
+        }
+    }
+
+    #[test]
     fn the_environment_overrides_the_file() {
         let env = |name: &str| (name == "SLACK_CHANNEL_FIXME_ID").then(|| "C9".to_owned());
         let config = Config::resolve(&file_with(""), env).unwrap();
