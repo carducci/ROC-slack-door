@@ -614,6 +614,35 @@ mod tests {
     }
 
     #[test]
+    fn a_thread_read_after_a_reply_lands_includes_it() {
+        let (kernel, threads) = two_channel_door("read-after-reply");
+        let iri = "urn:slack:channel:fixme:thread:k";
+        issue(&kernel, Verb::Sink, iri).unwrap();
+        let before = text_of_reply(issue(&kernel, Verb::Source, iri).unwrap());
+        assert!(!before.contains("a person replies"), "{before}");
+        let root = threads.lock().unwrap().transport().posts()[0].ts.clone();
+        threads.lock().unwrap().transport_mut().feed(roc_slack_door::Event::Message {
+            id: "E1".to_owned(),
+            channel: "C2".to_owned(),
+            user: "U1".to_owned(),
+            ts: "1700000000.900000".to_owned(),
+            thread: Some(root),
+            text: "a person replies".to_owned(),
+        });
+        let after = text_of_reply(issue(&kernel, Verb::Source, iri).unwrap());
+        assert!(after.contains("a person replies"), "{after}");
+    }
+
+    #[test]
+    fn a_thread_read_declares_it_is_never_to_be_cached() {
+        let (kernel, _) = two_channel_door("read-expiry");
+        let iri = "urn:slack:channel:fixme:thread:k";
+        issue(&kernel, Verb::Sink, iri).unwrap();
+        let reply = issue(&kernel, Verb::Source, iri).unwrap();
+        assert_eq!(reply.expiry, ikigai_core::Expiry::Always);
+    }
+
+    #[test]
     fn a_key_known_in_one_channel_is_unknown_in_another() {
         let (kernel, _) = two_channel_door("unknown-elsewhere");
         issue(&kernel, Verb::Sink, "urn:slack:channel:gonk-chat:thread:k").unwrap();
