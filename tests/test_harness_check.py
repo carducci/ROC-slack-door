@@ -1404,6 +1404,15 @@ class ControlCodeTest(unittest.TestCase):
                 self.assertEqual(1, len(problems), problems)
                 self.assertIn(reason, problems[0])
 
+    def test_each_error_ast_parse_can_raise_is_said_not_raised(self) -> None:
+        # ikigai-slack#303: one arm of the except for each of these; narrowing it fails one.
+        (self.repo / "tools/deep.py").write_bytes(b"x = 1\n")
+        for exc in (SyntaxError("bad"), ValueError("nul"), MemoryError("mem"), RecursionError("deep")):
+            with self.subTest(exc=type(exc).__name__):
+                with mock.patch.object(harness.ast, "parse", side_effect=exc):
+                    problems = [p for p in harness.check(self.repo) if p.startswith("tools/deep.py can't be parsed (")]
+                self.assertEqual(1, len(problems), problems)
+
     def test_a_justfile_with_a_bom_has_its_recipe(self) -> None:
         (self.repo / "bom.just").write_bytes(b"\xef\xbb\xbfmain:\n    echo hi\n")
         self.assertIsNone(harness.undefined_in(self.repo / "bom.just", "bom.just", "main"))
