@@ -364,27 +364,44 @@ fn has_control(id: &str) -> bool {
 }
 
 fn parse(text: &str) -> io::Result<BTreeMap<(String, String), Thread>> {
-    text.lines()
-        .map(|line| {
-            let fields: Vec<&str> = line.split('\t').collect();
-            match fields.as_slice() {
-                // The line's key and timestamp are held to the shapes record holds new ones to.
-                // Its channel id is kept as it is: one that holds a control character reads back
-                // the same, and is for an undeclared channel, whose lines design D6 keeps.
-                [key, channel, ts] if check_key(key).is_ok() && is_slack_ts(ts) => Ok((
-                    slot(channel, key),
-                    Thread {
-                        channel: (*channel).to_owned(),
-                        ts: (*ts).to_owned(),
-                    },
-                )),
-                _ => Err(io::Error::new(
+    let mut threads = BTreeMap::new();
+    let mut first_line = BTreeMap::new();
+    for (n, line) in (1..).zip(text.lines()) {
+        let fields: Vec<&str> = line.split('\t').collect();
+        // The line's key and timestamp are held to the shapes record holds new ones to.
+        // Its channel id is kept as it is: one that holds a control character reads back
+        // the same, and is for an undeclared channel, whose lines design D6 keeps.
+        let (key, channel, ts) = match fields.as_slice() {
+            [key, channel, ts] if check_key(key).is_ok() && is_slack_ts(ts) => {
+                (*key, *channel, *ts)
+            }
+            _ => {
+                return Err(io::Error::new(
                     io::ErrorKind::InvalidData,
                     format!("bad line in {MAP_FILE}: {line:?}"),
-                )),
+                ))
             }
-        })
-        .collect()
+        };
+        // record never writes two lines for one slot, so a second one is refused, not kept over
+        // the first: the next save would drop the first thread.
+        if let Some(first) = first_line.insert(slot(channel, key), n) {
+            return Err(io::Error::new(
+                io::ErrorKind::InvalidData,
+                format!(
+                    "key {key:?} in channel {channel:?} is on two lines of {MAP_FILE}: \
+                     line {first} and line {n}"
+                ),
+            ));
+        }
+        threads.insert(
+            slot(channel, key),
+            Thread {
+                channel: channel.to_owned(),
+                ts: ts.to_owned(),
+            },
+        );
+    }
+    Ok(threads)
 }
 
 #[cfg(test)]
