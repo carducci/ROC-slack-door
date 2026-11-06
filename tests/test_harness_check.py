@@ -1060,6 +1060,23 @@ class ControlCodeTest(unittest.TestCase):
             self.enforced_at(where),
         )
 
+    def test_an_enforced_at_path_that_comes_back_by_the_checkout_name_fails(self) -> None:
+        # The copy is named `repo`, so `../repo/` resolves back inside it. The answer must not
+        # depend on the checkout's directory name: refused, as it is in a checkout named `other`.
+        where = f"../{self.repo.name}/.github/workflows/ci.yml"
+        self.assertEqual(
+            [f"{CONTROLS}ci-checks: enforcedAt {where}, and {where} is outside this repository"],
+            self.enforced_at(where),
+        )
+
+    def test_an_enforced_at_path_with_an_inner_dot_dot_segment_fails(self) -> None:
+        # Inside the repository once it is resolved, but not a path in its normalised form.
+        where = ".github/../.github/workflows/ci.yml"
+        self.assertEqual(
+            [f"{CONTROLS}ci-checks: enforcedAt {where}, and {where} has a `..` segment"],
+            self.enforced_at(where),
+        )
+
     def test_an_absolute_enforced_at_path_is_not_relative_to_the_repository(self) -> None:
         # Refused whether it names a file outside the repository or inside, as statedIn is, and
         # however it is spelled: a drive letter, a URL or any colon that is not `owner/repo:`
