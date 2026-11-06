@@ -347,7 +347,7 @@ class CodeEncodingTest(unittest.TestCase):
         return found[0]
 
     def test_a_utf8_file_with_latin1_bytes_is_refused_with_what_python_said(self) -> None:
-        self.assertIn("utf-8", self.refused(b'x = "caf\xe9"\n'))
+        self.assertIn("Non-UTF-8 code", self.refused(b'x = "caf\xe9"\n'))
 
     def test_an_unknown_declared_encoding_is_refused(self) -> None:
         self.assertIn("no-such-codec", self.refused(b"# -*- coding: no-such-codec -*-\nx = 1\n"))
@@ -367,7 +367,7 @@ class CodeEncodingTest(unittest.TestCase):
         self.assertIn("null bytes", self.refused(b"x = 1\x00\n"))
 
     def test_a_bom_with_a_latin1_cookie_is_refused_with_what_python_said(self) -> None:
-        self.assertIn("latin-1", self.refused(b"\xef\xbb\xbf# -*- coding: latin-1 -*-\nx = 1\n"))
+        self.assertIn("with BOM", self.refused(b"\xef\xbb\xbf# -*- coding: latin-1 -*-\nx = 1\n"))
 
     def test_one_bad_file_does_not_hide_another(self) -> None:
         (self.repo / "tools/m001.py").write_bytes(b"x = '\xe9'\n")
