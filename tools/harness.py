@@ -541,7 +541,8 @@ class Graph:
 
 
 def read_graph(path: Path) -> Graph:
-    return Graph(parse_turtle(path.read_text(encoding="utf-8"), str(path))[0])
+    # utf-8-sig: a leading byte order mark is not a term of the file (ikigai-slack#304).
+    return Graph(parse_turtle(path.read_text(encoding="utf-8-sig"), str(path))[0])
 
 
 def insert_data(graph: str, triples: list[tuple]) -> str:
