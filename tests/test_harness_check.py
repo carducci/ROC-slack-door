@@ -3,6 +3,7 @@ and a guide and the AGENTS.md section it cites agree on the words they quote."""
 
 from __future__ import annotations
 
+import ast
 import builtins
 import contextlib
 import errno
@@ -343,11 +344,14 @@ class CodeEncodingTest(unittest.TestCase):
     def refused(self, data: bytes) -> str:
         found = self.problems_for(data)
         self.assertEqual(1, len(found), found)
-        self.assertTrue(found[0].startswith("tools/m000.py can't be parsed ("), found[0])
+        # What Python says of these same bytes is computed here, so no version's wording is pinned.
+        with self.assertRaises((SyntaxError, ValueError)) as said:
+            ast.parse(data, "tools/m000.py")
+        self.assertEqual(f"tools/m000.py can't be parsed ({said.exception})", found[0])
         return found[0]
 
     def test_a_utf8_file_with_latin1_bytes_is_refused_with_what_python_said(self) -> None:
-        self.assertIn("Non-UTF-8 code", self.refused(b'x = "caf\xe9"\n'))
+        self.refused(b'x = "caf\xe9"\n')
 
     def test_an_unknown_declared_encoding_is_refused(self) -> None:
         self.assertIn("no-such-codec", self.refused(b"# -*- coding: no-such-codec -*-\nx = 1\n"))
@@ -364,10 +368,10 @@ class CodeEncodingTest(unittest.TestCase):
         self.refused(b"def (:\n")
 
     def test_a_nul_in_valid_utf8_is_refused_with_what_python_said(self) -> None:
-        self.assertIn("null bytes", self.refused(b"x = 1\x00\n"))
+        self.refused(b"x = 1\x00\n")
 
     def test_a_bom_with_a_latin1_cookie_is_refused_with_what_python_said(self) -> None:
-        self.assertIn("with BOM", self.refused(b"\xef\xbb\xbf# -*- coding: latin-1 -*-\nx = 1\n"))
+        self.refused(b"\xef\xbb\xbf# -*- coding: latin-1 -*-\nx = 1\n")
 
     def test_one_bad_file_does_not_hide_another(self) -> None:
         (self.repo / "tools/m001.py").write_bytes(b"x = '\xe9'\n")
