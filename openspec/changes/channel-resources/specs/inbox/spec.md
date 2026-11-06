@@ -5,8 +5,8 @@
 A message posted by one of a channel's speakers as a reply in a thread the door knows in that
 channel SHALL be written to `urn:slack:channel:{name}:inbox` as one tuple carrying the thread's
 key, the author's Slack user id, the time in UTC and the text. Reading the thread afterwards
-SHALL include the message: the thread's resource is cut when the message lands, so a cached
-read is never served stale.
+SHALL include the message: the thread's reads are never cached (each one asks Slack), so a
+read made after the message lands is never served stale.
 
 #### Scenario: A reply arrives
 

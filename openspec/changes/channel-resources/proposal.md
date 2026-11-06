@@ -66,9 +66,11 @@ configuration, the Slack id requests go to, the speakers the inbox admits, the i
 deliveries land in and the capability strings that gate the verbs. Nothing threads a channel
 argument through the endpoints; the name carries it. A client's mount
 (`urn:sd:` from Dax's kernel, see Impact) is a corridor over the whole space that the door
-never sees. The inbox spec requires a thread's resource to be cut when a speaker's message
-lands in it, so a cached read is never stale; nothing under `artifacts/` makes that cut yet,
-and no task names it. Reads are fresh today only because nothing caches them.
+never sees. The inbox spec requires that a read after a speaker's message lands includes it.
+The door meets that by never caching a thread's reads: every endpoint answers with
+`Representation::new`, which the kernel gives `Expiry::Always` (uncacheable), so nothing is
+held to be cut. No `Kernel::cut` call is needed, and none is made; if reads are ever cached,
+the cut moves into the same change.
 
 **Sealed.** The old `urn:slack:thread:{key}`, `urn:slack:thread:{key}:reaction:{name}` and
 `urn:cap:slack:{read,post,react}` are to be answered by nothing, with no alias (see
