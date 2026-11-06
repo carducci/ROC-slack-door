@@ -60,6 +60,7 @@ import html
 import html.entities
 import itertools
 import os
+import posixpath
 import re
 import secrets
 import stat
@@ -892,8 +893,11 @@ def repo_file(root: Path, name: str) -> tuple[Path | None, str]:
     """The file a guide's statedIn or a control's enforcedAt names, resolved against the
     repository's root (as vocabulary.ttl defines both), or None and why. Refused as not relative,
     on every platform, wherever it points: a name that starts with / or \\ (POSIX absolute, UNC),
-    or holds a colon (a drive letter, a URL, a colon in a directory's name). One that leaves the
-    repository through `..` or by a symlink names no file of it, and a NUL is no path at all.
+    or holds a colon (a drive letter, a URL, a colon in a directory's name). Any `..` segment, split
+    on `/` or `\\`, is refused as written, before anything is resolved: "is outside this
+    repository" when it leaves the root, else "has a `..` segment", even where it stays inside.
+    A symlink is still judged by its resolved target: one that leaves the repository names no
+    file of it. A NUL is no path at all.
     One that is in the repository but is no file is refused as what it is: a directory; a FIFO
     or a socket ("is not a file"); a symlink to nothing, or a symlink loop; a path the system
     won't let this process reach ("can't be read (<its reason>)", as read_sections words it);
@@ -907,6 +911,12 @@ def repo_file(root: Path, name: str) -> tuple[Path | None, str]:
         return None, "is not a path relative to this repository's root"
     if "\x00" in name:
         return None, "is not a path"
+    segments = re.split(r"[\\/]", name)
+    if ".." in segments:
+        lexical = posixpath.normpath("/".join(segments))
+        if lexical.split("/")[0] == "..":
+            return None, "is outside this repository"
+        return None, "has a `..` segment"
     link = root / name
     # Not strict: a loop or a dangling link is kept as written, and named by the stat below.
     path = Path(os.path.realpath(link))
