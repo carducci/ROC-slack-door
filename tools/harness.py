@@ -65,6 +65,7 @@ import secrets
 import stat
 import sys
 import time
+import tokenize
 import unicodedata
 from dataclasses import dataclass, field
 from pathlib import Path
@@ -624,10 +625,13 @@ def emissions(repo: Path) -> tuple[list[tuple[str, str, str]], list[str]]:
     for top in CODE_ROOTS:
         for path in sorted((repo / top).rglob("*.py")):
             rel = path.relative_to(repo).as_posix()
+            # Read as Python reads it: its coding declaration (PEP 263) or a BOM decides, and UTF-8
+            # when it has neither (ikigai-slack#305).
             try:
-                text = path.read_text(encoding="utf-8")
-            except UnicodeDecodeError:
-                bad.append(f"{rel} is not UTF-8 text")
+                with tokenize.open(path) as f:
+                    text = f.read()
+            except (UnicodeDecodeError, SyntaxError):
+                bad.append(f"{rel} is not text in its declared encoding (UTF-8 when it declares none)")
                 continue
             except OSError as e:
                 bad.append(f"{rel} can't be read ({e.strerror})")
