@@ -67,10 +67,11 @@ deliveries land in and the capability strings that gate the verbs. Nothing threa
 argument through the endpoints; the name carries it. A client's mount
 (`urn:sd:` from Dax's kernel, see Impact) is a corridor over the whole space that the door
 never sees. The inbox spec requires that a read after a speaker's message lands includes it.
-The door meets that by never caching a thread's reads: every endpoint answers with
-`Representation::new`, which the kernel gives `Expiry::Always` (uncacheable), so nothing is
-held to be cut. No `Kernel::cut` call is needed, and none is made; if reads are ever cached,
-the cut moves into the same change.
+The door meets that by never caching a thread's reads. Every Slack endpoint (thread, channel,
+reaction) answers with `Representation::new`, which sets `Expiry::Always` (uncacheable). The
+inbox builds no representation: it passes on the intray space's answer, whose expiry
+ikigai-intray sets (uncacheable today). So nothing is held to be cut. No `Kernel::cut` call is
+needed, and none is made; if reads are ever cached, the cut moves into the same change.
 
 **Sealed.** The old `urn:slack:thread:{key}`, `urn:slack:thread:{key}:reaction:{name}` and
 `urn:cap:slack:{read,post,react}` are to be answered by nothing, with no alias (see
