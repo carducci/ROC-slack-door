@@ -625,14 +625,18 @@ def emissions(repo: Path) -> tuple[list[tuple[str, str, str]], list[str]]:
         for path in sorted((repo / top).rglob("*.py")):
             rel = path.relative_to(repo).as_posix()
             try:
-                text = path.read_text(encoding="utf-8")
+                text = path.read_text(encoding="utf-8-sig")
             except UnicodeDecodeError:
                 bad.append(f"{rel} is not UTF-8 text")
                 continue
             except OSError as e:
                 bad.append(f"{rel} can't be read ({e.strerror})")
                 continue
-            tree = ast.parse(text, rel)
+            try:
+                tree = ast.parse(text, rel)
+            except (SyntaxError, ValueError, MemoryError, RecursionError) as e:
+                bad.append(f"{rel} can't be parsed ({e})")
+                continue
             found_here, bad_here = _emitters_in(tree, rel)
             found += found_here
             bad += bad_here
@@ -692,7 +696,7 @@ def undefined_in(path: Path, cited: str, name: str) -> str | None:
         if not JUST_NAME.fullmatch(name):
             return f"{cited}: {name!r} is not a recipe name of a justfile ([A-Za-z_][A-Za-z0-9_-]*)"
         try:
-            text = path.read_text(encoding="utf-8")
+            text = path.read_text(encoding="utf-8-sig")
         except UnicodeDecodeError:
             return f"{cited} is not UTF-8 text"
         except OSError as e:

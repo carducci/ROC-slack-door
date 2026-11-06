@@ -1388,6 +1388,26 @@ class ControlCodeTest(unittest.TestCase):
             self.enforced_at(where),
         )
 
+    def test_a_py_file_with_a_bom_parses(self) -> None:
+        # ikigai-slack#282: read_text kept the BOM and ast.parse raised SyntaxError.
+        (self.repo / "tools/bom.py").write_bytes(b"\xef\xbb\xbfdef main():\n    pass\n")
+        self.assertEqual([], harness.check(self.repo))
+
+    def test_a_py_file_ast_rejects_is_said_so(self) -> None:
+        for data, reason in (
+            (b"def (:\n", "invalid syntax"),
+            (b"x = 1\x00\n", "null bytes"),
+        ):
+            with self.subTest(data=data):
+                (self.repo / "tools/bad.py").write_bytes(data)
+                problems = [p for p in harness.check(self.repo) if p.startswith("tools/bad.py can't be parsed (")]
+                self.assertEqual(1, len(problems), problems)
+                self.assertIn(reason, problems[0])
+
+    def test_a_justfile_with_a_bom_has_its_recipe(self) -> None:
+        (self.repo / "bom.just").write_bytes(b"\xef\xbb\xbfmain:\n    echo hi\n")
+        self.assertIsNone(harness.undefined_in(self.repo / "bom.just", "bom.just", "main"))
+
 
 if __name__ == "__main__":
     unittest.main()
