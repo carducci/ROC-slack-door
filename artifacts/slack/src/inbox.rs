@@ -219,7 +219,8 @@ impl Inbox {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::{FakeSlack, Grants};
+    use crate::FakeSlack;
+    use ikigai_core::Capability;
 
     const CHANNEL: &str = "C1";
     const BOT: &str = "UBOT";
@@ -236,7 +237,7 @@ mod tests {
     fn with_thread(dir: &Path) -> (Threads<FakeSlack>, String) {
         let mut threads = Threads::open(dir, CHANNEL, FakeSlack::new()).unwrap();
         threads
-            .write(&Grants::all(), "carducci-54", "Blocked on a token")
+            .write(&Capability::root(), "carducci-54", "Blocked on a token")
             .unwrap();
         let root = threads.transport().posts()[0].ts.clone();
         (threads, root)
@@ -328,7 +329,7 @@ mod tests {
             panic!("expected a message with a key");
         };
         assert_eq!((user.as_str(), text.as_str()), ("U2", "bug: the save button overlaps the footer"));
-        threads.write_in(&Grants::all(), "fixme", &key, "Fixed").unwrap();
+        threads.write_in(&Capability::root(), "fixme", &key, "Fixed").unwrap();
         let post = &threads.transport().posts()[1];
         assert_eq!(post.thread.as_deref(), Some("1700000100.000001"));
     }
@@ -388,7 +389,7 @@ mod tests {
         let dir = scratch("collision");
         let (mut threads, _) = with_thread(&dir);
         threads
-            .write(&Grants::all(), "m-1700000100-000001", "The caller's own")
+            .write(&Capability::root(), "m-1700000100-000001", "The caller's own")
             .unwrap();
         let event = reply(CHANNEL, "U1", None, "What's blocked today?");
         let delivery = inbox(&dir).deliver(event, &mut threads).unwrap();
@@ -482,7 +483,7 @@ mod tests {
         let named = [("gonk-chat".to_owned(), "C1".to_owned()), ("fixme".to_owned(), "C2".to_owned())];
         let mut threads = Threads::open_channels(&dir, &named, FakeSlack::new()).unwrap();
         threads
-            .write_in(&Grants::all(), "gonk-chat", "carducci-54", "Blocked on a token")
+            .write_in(&Capability::root(), "gonk-chat", "carducci-54", "Blocked on a token")
             .unwrap();
         let root = threads.transport().posts()[0].ts.clone();
         let channels = [

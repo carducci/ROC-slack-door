@@ -22,8 +22,10 @@ written against them can move to another chat system by swapping the door undern
 | `urn:slack:channel:{name}:thread:{key}:reaction:{reaction}` | sink, delete | A reaction on the thread's opening message (`white_check_mark`, for example). |
 | `urn:slack:channel:{name}:inbox` ([ikigai-intray](https://crates.io/crates/ikigai-intray)) | the space's own | Where replies and reactions from a channel's speakers land, tagged with the thread's key. A speaker's message that starts a new conversation is recorded as a thread and lands under a key the door mints (`m-` and its time, e.g. `m-1700000000-000001`), so a reply goes under it. |
 
-Three capabilities gate the verbs: `urn:cap:slack:read`, `urn:cap:slack:post`, and
-`urn:cap:slack:react`. A host can let one caller read and another post.
+Three capabilities gate the verbs, each scoped to the channel it acts in:
+`urn:cap:slack:channel:{name}:read` (a thread, and the inbox), `urn:cap:slack:channel:{name}:post`
+and `urn:cap:slack:channel:{name}:react`. A host can let one caller read and another post, and
+let a caller post in one channel and not in another.
 
 The specs say exactly what each resource does. While the
 [`channel-resources`](openspec/changes/channel-resources/proposal.md) change is in flight they are its deltas:
@@ -32,7 +34,6 @@ The specs say exactly what each resource does. While the
 [inbox](openspec/changes/channel-resources/specs/inbox/spec.md), and
 [configuration](openspec/changes/channel-resources/specs/configuration/spec.md).
 Once it is archived (task 5.3) they are the same four under `openspec/specs/`.
-The older `urn:slack:thread:{key}` names are still bound beside the channel ones.
 
 ## Two pieces
 
@@ -139,11 +140,12 @@ Another ikigai kernel mounts the socket once, under an alias prefix:
 ikigai --mount "urn:sd:=<state dir>/door.sock"
 ```
 
-Then it names the resources through the alias: `urn:sd:slack:thread:<key>` for a thread and
-`urn:sd:space:<inbox name>` for the inbox, and `urn:sd:slack:thread:<key>:reaction:<name>` for
-a reaction. One alias mount, because `--mount` strips its prefix (`urn:slack:thread:x` would
-reach the door as `urn:thread:x`, which it does not serve) and `urn:space:` is also served
-locally, so a mount there would never reach the door.
+Then it names the resources through the alias: `urn:sd:slack:channel:<name>:thread:<key>` for a
+thread and `urn:sd:space:<inbox name>` for the inbox, and
+`urn:sd:slack:channel:<name>:thread:<key>:reaction:<reaction>` for a reaction. One alias mount,
+because `--mount` strips its prefix (`urn:slack:channel:<name>:thread:x` would reach the door as
+`urn:channel:<name>:thread:x`, which it does not serve) and `urn:space:` is also served locally,
+so a mount there would never reach the door.
 
 Only the machine that runs the door should hold the socket; the socket is not a network
 address, and it is not exposed beyond that machine.
