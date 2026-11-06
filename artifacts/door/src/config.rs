@@ -130,10 +130,10 @@ impl Config {
             let id = value(&format!("{prefix}_ID")).unwrap_or_default().trim().to_owned();
             if id.is_empty() {
                 problems.push(format!("channel {name} has no id: set {prefix}_ID"));
-            } else if id.chars().any(char::is_control) {
+            } else if !roc_slack_door::is_slack_channel_id(&id) {
                 problems.push(format!(
-                    "channel {name} has an id with a tab, newline or other control character: \
-                     fix {prefix}_ID"
+                    "channel {name} has an id that is not a Slack channel id (upper-case letters \
+                     and digits): fix {prefix}_ID"
                 ));
             }
             let speakers: Vec<String> = value(&format!("{prefix}_SPEAKERS"))
@@ -261,14 +261,32 @@ mod tests {
     }
 
     #[test]
-    fn a_channel_id_with_a_control_character_stops_the_start_and_is_named() {
-        let expected = "channel fixme has an id with a tab, newline or other control character: \
-            fix SLACK_CHANNEL_FIXME_ID";
+    fn a_channel_id_that_is_not_a_slack_channel_id_stops_the_start_and_is_named() {
+        let expected = "channel fixme has an id that is not a Slack channel id (upper-case \
+            letters and digits): fix SLACK_CHANNEL_FIXME_ID";
         let file = parse_file(&format!("{GOOD}SLACK_CHANNEL_FIXME_ID=\"C2\tx\"\n"));
         assert_eq!(only(refused(&file)), expected);
-        for bad in ["C2\nx", "C2\rx", "C2\u{7f}", " C2\tx \n"] {
+        for bad in ["C2\nx", "C2\rx", "C2\u{7f}", " C2\tx \n", "C2 x", "C2\u{2028}x", "c2"] {
             let env = |name: &str| (name == "SLACK_CHANNEL_FIXME_ID").then(|| bad.to_owned());
             assert_eq!(only(Config::resolve(&file_with(""), env).unwrap_err().0), expected, "{bad:?}");
+        }
+    }
+
+    #[test]
+    fn white_space_around_a_channel_id_is_trimmed_and_the_trimmed_id_starts() {
+        for padded in ["\u{a0}C2", "C2\u{a0}", "\u{2028}C2", "C2\u{3000}", "\u{85}C2", "C2\t", " C2 "] {
+            let env = |name: &str| (name == "SLACK_CHANNEL_FIXME_ID").then(|| padded.to_owned());
+            let config = Config::resolve(&file_with(""), env).unwrap();
+            assert_eq!(config.channels[1].id, "C2", "{padded:?}");
+        }
+    }
+
+    #[test]
+    fn a_channel_id_with_punctuation_or_a_lower_case_letter_stops_the_start() {
+        for bad in ["C1-X", "C1#X", "C1.X", "C1:X", "C1_X", "C1x", "-C1", "C1!"] {
+            let env = |name: &str| (name == "SLACK_CHANNEL_FIXME_ID").then(|| bad.to_owned());
+            let problem = only(Config::resolve(&file_with(""), env).unwrap_err().0);
+            assert!(problem.contains("not a Slack channel id"), "{bad:?}: {problem}");
         }
     }
 

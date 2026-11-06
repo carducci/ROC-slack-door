@@ -22,7 +22,7 @@ mod threads;
 
 pub use conversation::{to_json, Entry};
 pub use inbox::{Delivery, Inbox};
-pub use threads::{Thread, ThreadError, Threads};
+pub use threads::{is_slack_channel_id, Thread, ThreadError, Threads};
 
 /// What the door asks of Slack. The real implementation speaks the Web API and Socket Mode;
 /// the fake in this crate records what it is asked and answers from memory.
