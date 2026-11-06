@@ -3,7 +3,7 @@
 ## Why
 
 When `chat.postMessage` succeeds but a later step fails (the answer carries no `ts`, the `ts`
-is malformed or refused, or the save of `threads.tsv` fails), `write_at` answers a plain
+is malformed, or the save of `threads.tsv` fails), `write_at` answers a plain
 `ThreadError::State`, which the door maps to `Endpoint("the thread map: …")`. An answer with
 no `ts` maps to `TransportError::Unavailable`, which invites a retry. Nothing tells the caller
 the text is already in Slack, so a caller that retries posts it a second time and the first
@@ -21,12 +21,24 @@ Merging this change is Michael's acceptance.
 
 ## What Changes
 
-- **One error for every failure after the post.** "Posted, not recorded" names the key and the
-  `ts` when there is one. It covers an answer with no `ts`, a malformed `ts`, a refused `ts`
-  and a failed save of `threads.tsv`.
-- **It is not a retryable error.** It is not `Unavailable`: a caller must not retry it, since
-  the text is already in Slack.
+- **One error for a write that opened a thread and posted.** "Posted, not recorded" names the
+  key and the `ts`. It covers an answer with no `ts`, a malformed `ts` (one `is_slack_ts` does
+  not accept) and a failed save of `threads.tsv`. A reply and an announcement have nothing to
+  record: when Slack answered `ok` they succeed, whether or not the answer holds a usable `ts`.
+- **The carrier is `Error::Endpoint`.** Its message begins `posted-not-recorded: ` and then
+  names the key and the `ts`, escaped, the way `no-channel` carries its code. It is never
+  `Unavailable` or `Timeout`: a caller must not retry it as if nothing posted.
+- **The posted thread is kept.** After a failed save the door keeps the (channel, key) → `ts`
+  slot in memory, so a retry replies in the posted thread instead of opening a second one, and
+  the next save that succeeds records it. A restart before that loses the slot, which the error
+  told the caller. This reverses PR #46's
+  `a_thread_whose_save_failed_is_not_kept_and_a_retry_opens_it`, which becomes a test of the
+  new scenario.
 - **Before or during the post nothing changes.** A failed post keeps today's answers.
+
+Not in this change: a post whose outcome is unknown (an unreadable 200, a timeout after
+sending) can't be told from one that never posted, so it is not `posted-not-recorded`; it is
+filed separately as `ikigai-slack#324`.
 
 ## Impact
 
