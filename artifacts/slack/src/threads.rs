@@ -65,8 +65,8 @@ impl<T: SlackTransport> Threads<T> {
         Self::open_channels(state_dir, &[(String::new(), channel.to_owned())], transport)
     }
 
-    /// Opens the map for the declared `channels`, each a (name, Slack id) pair. An id with a
-    /// control character is refused here, before anything can be posted to it.
+    /// Opens the map for the declared `channels`, each a (name, Slack id) pair. An id that is not
+    /// a Slack channel id is refused here, before anything can be posted to it.
     pub fn open_channels(
         state_dir: &Path,
         channels: &[(String, String)],
@@ -75,10 +75,10 @@ impl<T: SlackTransport> Threads<T> {
         if channels.is_empty() {
             return Err(io::Error::new(io::ErrorKind::InvalidInput, "no channel declared"));
         }
-        if let Some((_, id)) = channels.iter().find(|(_, id)| has_control(id)) {
+        if let Some((_, id)) = channels.iter().find(|(_, id)| !is_slack_channel_id(id)) {
             return Err(io::Error::new(
                 io::ErrorKind::InvalidInput,
-                format!("a channel id with a control character: {id:?}"),
+                format!("a channel id that is not a Slack channel id: {id:?}"),
             ));
         }
         fs::create_dir_all(state_dir)?;
@@ -334,8 +334,8 @@ fn slot(channel: &str, key: &str) -> (String, String) {
 }
 
 /// Refuses a thread that cannot be one line of threads.tsv and read back the same: its key must
-/// be one `check_key` takes, its timestamp of Slack's shape, and its channel id must hold no
-/// control character: no tab or newline.
+/// be one `check_key` takes, its timestamp of Slack's shape, and its channel id a Slack channel
+/// id, so no tab or newline can be in it.
 fn check_line(key: &str, thread: &Thread) -> io::Result<()> {
     if check_key(key).is_err() {
         return Err(io::Error::new(
@@ -349,18 +349,20 @@ fn check_line(key: &str, thread: &Thread) -> io::Result<()> {
             format!("a timestamp of another shape: {:?}", thread.ts),
         ));
     }
-    if has_control(&thread.channel) {
+    if !is_slack_channel_id(&thread.channel) {
         return Err(io::Error::new(
             io::ErrorKind::InvalidData,
-            format!("a channel id with a control character: {:?}", thread.channel),
+            format!("a channel id that is not a Slack channel id: {:?}", thread.channel),
         ));
     }
     Ok(())
 }
 
-/// Whether `id` holds a control character, a tab or newline among them: no Slack channel id does.
-fn has_control(id: &str) -> bool {
-    id.chars().any(char::is_control)
+/// Whether `id` is a Slack channel id: one or more upper-case letters and digits, as Slack writes
+/// them (`C1`, `C0123ABCD`). Anything else, a space, a control character or the empty string
+/// included, can never be one, so the door refuses it before it can be posted to.
+pub fn is_slack_channel_id(id: &str) -> bool {
+    !id.is_empty() && id.bytes().all(|b| b.is_ascii_uppercase() || b.is_ascii_digit())
 }
 
 fn parse(text: &str) -> io::Result<BTreeMap<(String, String), Thread>> {
@@ -807,6 +809,35 @@ mod tests {
             let channels = [("a".to_owned(), "C1".to_owned()), ("b".to_owned(), (*bad).to_owned())];
             let err = Threads::open_channels(&dir, &channels, NeverCalled).err().expect("opened");
             assert_eq!(err.kind(), io::ErrorKind::InvalidInput, "{bad:?}");
+            assert!(!dir.join(MAP_FILE).exists(), "{bad:?}");
+        }
+    }
+
+    #[test]
+    fn a_channel_id_that_no_slack_channel_id_is_refused_at_open_so_nothing_is_posted() {
+        // None of these holds a control character, and none can be a Slack channel id: empty, an
+        // inner space, U+2028, U+200B, a leading space, a BOM, lower case.
+        for (n, bad) in ["", "C1 x", " C1", "C1\u{2028}x", "C1\u{200b}x", "\u{feff}C1", "c1"]
+            .iter()
+            .enumerate()
+        {
+            let dir = scratch(&format!("not-a-channel-id-{n}"));
+            let err = Threads::open(&dir, bad, NeverCalled).err().expect("opened");
+            assert_eq!(err.kind(), io::ErrorKind::InvalidInput, "{bad:?}");
+            let channels = [("a".to_owned(), "C1".to_owned()), ("b".to_owned(), (*bad).to_owned())];
+            let err = Threads::open_channels(&dir, &channels, NeverCalled).err().expect("opened");
+            assert_eq!(err.kind(), io::ErrorKind::InvalidInput, "{bad:?}");
+            assert!(!dir.join(MAP_FILE).exists(), "{bad:?}");
+        }
+    }
+
+    #[test]
+    fn an_adopted_channel_id_that_no_slack_channel_id_is_refused_before_the_map() {
+        for (n, bad) in ["", "C1 x", "C1\u{2028}x", "C1\u{200b}x"].iter().enumerate() {
+            let dir = scratch(&format!("not-a-channel-id-adopt-{n}"));
+            let mut threads = Threads::open(&dir, "C1", FakeSlack::new()).unwrap();
+            let err = threads.adopt(bad, "k", "1700000100.000001").unwrap_err();
+            assert_eq!(err.kind(), io::ErrorKind::InvalidData, "{bad:?}");
             assert!(!dir.join(MAP_FILE).exists(), "{bad:?}");
         }
     }
