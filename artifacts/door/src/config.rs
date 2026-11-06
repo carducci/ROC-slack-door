@@ -273,6 +273,24 @@ mod tests {
     }
 
     #[test]
+    fn white_space_around_a_channel_id_is_trimmed_and_the_trimmed_id_starts() {
+        for padded in ["\u{a0}C2", "C2\u{a0}", "\u{2028}C2", "C2\u{3000}", "\u{85}C2", "C2\t", " C2 "] {
+            let env = |name: &str| (name == "SLACK_CHANNEL_FIXME_ID").then(|| padded.to_owned());
+            let config = Config::resolve(&file_with(""), env).unwrap();
+            assert_eq!(config.channels[1].id, "C2", "{padded:?}");
+        }
+    }
+
+    #[test]
+    fn a_channel_id_with_punctuation_or_a_lower_case_letter_stops_the_start() {
+        for bad in ["C1-X", "C1#X", "C1.X", "C1:X", "C1_X", "C1x", "-C1", "C1!"] {
+            let env = |name: &str| (name == "SLACK_CHANNEL_FIXME_ID").then(|| bad.to_owned());
+            let problem = only(Config::resolve(&file_with(""), env).unwrap_err().0);
+            assert!(problem.contains("not a Slack channel id"), "{bad:?}: {problem}");
+        }
+    }
+
+    #[test]
     fn a_channel_with_no_speakers_stops_the_start_and_is_named() {
         let mut file = file_with("");
         file.insert("SLACK_CHANNEL_FIXME_SPEAKERS".to_owned(), " , ".to_owned());
