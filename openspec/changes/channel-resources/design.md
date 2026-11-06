@@ -43,7 +43,7 @@ the door had opened it. Minted keys can't collide with a caller's keys unless a 
 
 ### D4. Capabilities are scoped by channel
 
-`urn:cap:slack:channel:{name}:{read,post,react}`. The inbox is read with `…:read`. The door
+`urn:cap:slack:channel:{name}:{read,post,react}`. The inbox, which serves only Source and Delete, is read and emptied with `…:read` alone. The door
 checks the capability for the channel the request names, before Slack is called. Whether the
 hub can grant a templated family or needs one string per channel doesn't matter here: the
 door checks exact strings.
