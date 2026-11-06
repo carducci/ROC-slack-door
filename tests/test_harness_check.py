@@ -1286,6 +1286,24 @@ class ControlCodeTest(unittest.TestCase):
                 expected = [] if ok else [f"{CONTROLS}ci-checks: enforcedAt {where}, and {path} has no {name}"]
                 self.assertEqual(expected, self.enforced_at(where))
 
+    def test_a_recipe_looking_line_in_a_triple_quoted_string_is_not_a_recipe(self) -> None:
+        # ikigai-slack#273: the body of an indented string is text, whichever quote kind.
+        (self.repo / ".github/justfile").write_text(
+            "a := '''\nsq: a\n'''\nb := \"\"\"\ndq: in a string\n\"\"\"\n"
+            "c := ```\nbt: x\n```\n\nreal:\n    echo\n"
+        )
+        for where, ok in (
+            (".github/justfile#sq", False),
+            (".github/justfile#dq", False),
+            (".github/justfile#bt", False),
+            (".github/justfile#real", True),
+        ):
+            with self.subTest(where=where):
+                shutil.copy(ROOT / ".gonk/harness/harness.ttl", self.repo / ".gonk/harness/harness.ttl")
+                path, _, name = where.partition("#")
+                expected = [] if ok else [f"{CONTROLS}ci-checks: enforcedAt {where}, and {path} has no {name}"]
+                self.assertEqual(expected, self.enforced_at(where))
+
     def test_a_backtick_default_and_an_escaped_quote_may_hold_a_colon_equals(self) -> None:
         # ikigai-slack#275: a backtick default is a quote kind too, and a double-quoted default
         # may hold an escaped quote before its `:=`.

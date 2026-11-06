@@ -706,6 +706,14 @@ def undefined_in(path: Path, cited: str, name: str) -> str | None:
             rf"^@?{re.escape(name)}(?![\w-])"
             r"(?:[^:'\"`\n]|'[^'\n]*'|`[^`\n]*`|\"(?:[^\"\\\n]|\\.)*\")*:(?!=)"
         )
+        # The body of a triple-quoted (indented) string is text, not recipes: keep its
+        # delimiters and newlines, drop the rest (ikigai-slack#273).
+        text = re.sub(
+            r"('''|\"\"\"|```)(.*?)\1",
+            lambda m: m[1] + "\n" * m[2].count("\n") + m[1],
+            text,
+            flags=re.S,
+        )
         found = re.search(recipe, text, re.M) is not None
     else:
         return (
