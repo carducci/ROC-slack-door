@@ -669,6 +669,45 @@ def _emitters_in(tree: ast.AST, rel: str):
     return found, bad
 
 
+def _blank_just_strings(text: str) -> str:
+    """A justfile with the body of each triple-quoted (indented) string emptied, its delimiters
+    and newlines kept, so a recipe-looking line inside one is not a recipe (ikigai-slack#273).
+    Read as just's lexer reads it, left to right: a string opens only where one can start, so
+    not in a comment, nor in a recipe body (an indented line); a one-line string is skipped
+    whole, so a quote triple in one opens nothing; and a backslash escapes the next character
+    in a double-quoted string (`\\"\\"\\"` does not close a `\"\"\"` string)."""
+    out: list[str] = []
+    i, n = 0, len(text)
+    while i < n:
+        c = text[i]
+        if (i == 0 or text[i - 1] == "\n") and c in " \t" or c == "#":
+            end = text.find("\n", i)
+            end = n if end < 0 else end
+            out.append(text[i:end])
+            i = end
+        elif c in "'\"`":
+            q = c * 3 if text.startswith(c * 3, i) else c
+            k = i + len(q)
+            while k < n and not text.startswith(q, k):
+                if c == '"' and text[k] == "\\":
+                    k += 1
+                elif len(q) == 1 and text[k] == "\n":
+                    break
+                k += 1
+            k = min(k, n)
+            closed = text.startswith(q, k)
+            end = k + len(q) if closed else k
+            if len(q) == 3:
+                out.append(q + "\n" * text.count("\n", i, k) + (q if closed else ""))
+            else:
+                out.append(text[i:end])
+            i = end
+        else:
+            out.append(c)
+            i += 1
+    return "".join(out)
+
+
 def undefined_in(path: Path, cited: str, name: str) -> str | None:
     """None when `name` is defined in `path` (written `cited`), else why not: a def or class of
     a .py file (`<module>` for its module-level code), a recipe of a justfile. A file of any
@@ -710,6 +749,7 @@ def undefined_in(path: Path, cited: str, name: str) -> str | None:
             rf"^@?{re.escape(name)}(?![\w-])"
             r"(?:[^:'\"`\n]|'[^'\n]*'|`[^`\n]*`|\"(?:[^\"\\\n]|\\.)*\")*:(?!=)"
         )
+        text = _blank_just_strings(text)
         found = re.search(recipe, text, re.M) is not None
     else:
         return (
