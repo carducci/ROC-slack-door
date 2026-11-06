@@ -625,15 +625,13 @@ def emissions(repo: Path) -> tuple[list[tuple[str, str, str]], list[str]]:
         for path in sorted((repo / top).rglob("*.py")):
             rel = path.relative_to(repo).as_posix()
             try:
-                text = path.read_text(encoding="utf-8-sig")
-            except UnicodeDecodeError:
-                bad.append(f"{rel} is not UTF-8 text")
-                continue
+                source = path.read_bytes()
             except OSError as e:
                 bad.append(f"{rel} can't be read ({e.strerror})")
                 continue
             try:
-                tree = ast.parse(text, rel)
+                # Bytes, as Python reads them: the BOM and a PEP 263 cookie decide the encoding.
+                tree = ast.parse(source, rel)
             except (SyntaxError, ValueError, MemoryError, RecursionError) as e:
                 bad.append(f"{rel} can't be parsed ({e})")
                 continue
