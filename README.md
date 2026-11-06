@@ -141,11 +141,11 @@ ikigai --mount "urn:sd:=<state dir>/door.sock"
 ```
 
 Then it names the resources through the alias: `urn:sd:slack:channel:<name>:thread:<key>` for a
-thread and `urn:sd:space:<inbox name>` for the inbox, and
+thread, `urn:sd:slack:channel:<name>:inbox` for the inbox, and
 `urn:sd:slack:channel:<name>:thread:<key>:reaction:<reaction>` for a reaction. One alias mount,
 because `--mount` strips its prefix (`urn:slack:channel:<name>:thread:x` would reach the door as
-`urn:channel:<name>:thread:x`, which it does not serve) and `urn:space:` is also served locally,
-so a mount there would never reach the door.
+`urn:channel:<name>:thread:x`, which it does not serve). The door does not serve `urn:space:{name}` at all: the inbox is
+reached only at its channel name, under that channel's `read` capability.
 
 Only the machine that runs the door should hold the socket; the socket is not a network
 address, and it is not exposed beyond that machine.

@@ -89,8 +89,11 @@ kept.
     between and never matches.
   - In the door's and the library's own `cargo test`, also run by `python3 scripts/test.py`,
     through the kernel: `Exists` and `Sink` on `urn:slack:thread:k` and on
-    `urn:slack:thread:k:reaction:x` answer that nothing is bound there (not a thread's
-    `no-thread` or a channel's `no-channel`, which an endpoint answers), and every capability
+    `urn:slack:thread:k:reaction:x` answer that nothing is bound there: the kernel's own
+    `no endpoint resolved for <iri>`, not any endpoint's answer (a thread's `no-thread`, a
+    channel's `no-channel`, a reaction's verb refusal), checked on all four pairs; a kernel
+    with the old reaction template bound to a stand-in endpoint fails that check. And
+    `urn:space:{name}` is bound to nothing in the door's kernel under any capability. And every capability
     in `descriptions()` starts with `urn:cap:slack:channel:`. These check what is served,
     however it is spelled.
 

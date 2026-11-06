@@ -49,10 +49,11 @@ and names the task that makes it true, or says that no task does yet.
 | thread | `urn:slack:channel:{name}:thread:{key}` | code: a handler (`ChannelThreadEndpoint`), with Source, Sink and Exists | Source reads Slack's replies to the map line's opening message through the transport, as JSON that carries each author's Slack user id (a bot's `bot_id` for a bot message) and UTC times, and no channel id or message timestamp. Sink posts a reply, or opens the thread when the key has no line (D2). Exists answers from the map. Not a tiny function: see the kept-code line |
 | minted key | `m-<seconds>-<micros>` | code: a function (`mint_key`), run by the inbox filter | a speaker's top-level message becomes a thread under a key that is its Slack timestamp with `.` changed to `-`, after `m-` (D3): `mint_key` rewrites the string, inside `Inbox::deliver_to`, and only a timestamp of Slack's shape whose key passes `check_key` gets one. The only state is the map line it writes, through `Threads::adopt`. The key, and so the timestamp, is then in the thread's name and in the inbox tuple's `slack:key`. Not a mapping rule: see the kept-code line |
 | reaction | `…:thread:{key}:reaction:{reaction}` | Sink and Delete edges | add or remove the reaction on the thread's opening message, found through the map line. Nothing is stored; Slack holds the reaction. No Source, and no body. Served by `ChannelEndpoint` in its first binding, on this template, bound before the thread's so the thread's `{key}` cannot swallow `:reaction:…`; the catch-all never sees a reaction. Any other verb here is NotFound "not served yet" |
-| inbox | `urn:slack:channel:{name}:inbox` | code: a handler (`InboxEndpoint`) over an ATOM | rewrites the request onto the intray space `urn:space:{name}`, which holds the channel's undelivered tuples, after checking the channel is declared. As built it passes the caller's capability through to the space; task 4.1 makes Source and Delete require `urn:cap:slack:channel:{name}:read` at this name (specs/inbox, "Reading an inbox needs the channel's capability"). Not an alias rule: see the kept-code line |
+| inbox | `urn:slack:channel:{name}:inbox` | code: a handler (`InboxEndpoint`) over an ATOM | rewrites the request onto the intray space `urn:space:{name}`, which holds the channel's undelivered tuples, after checking the channel is declared. Only Source and Delete are served, and `urn:cap:slack:channel:{name}:read` alone gates both (specs/inbox, "Reading an inbox needs the channel's capability"): the handler calls the intray through a kernel no caller can address, under the root capability narrowed to the one intray capability that verb needs on that one space (`urn:cap:space:read` for Source, `urn:cap:space:take` for Delete), never the caller's own. Every other verb, Sink included, is refused before the intray is touched, under any capability: a caller never writes into an inbox, and only the door's own deliveries (`drop_delivery`, through the same inner kernel) do. Not an alias rule: see the kept-code line |
+| intray space | `urn:space:{name}` | not served | the door's kernel binds nothing there, under any capability, root included: it answers that no endpoint resolved. The inbox is the only way to the space |
 | inbox tuple | a `slack:Message` or `slack:Reaction` blank node | code: string building (`turtle`) | one Turtle tuple per delivery, built in code from the event and the key the map gives it, with the author's Slack user id as `slack:user`; a host matches it with SPARQL. No template resource exists; see Open |
 | delivered events | `delivered.txt` in the state directory | ATOM, internal | the ids of events already delivered, so a redelivery lands once across restarts. Not a name |
-| capability | `urn:cap:slack:channel:{name}:read`, `…:post`, `…:react` | names, not resources | exact strings the door will check per request, before Slack is called (D4). Pending task 4.1: as built the door checks the three global strings `urn:cap:slack:read`, `…:post` and `…:react` on every channel |
+| capability | `urn:cap:slack:channel:{name}:read`, `…:post`, `…:react` | names, not resources | exact strings the door will check per request, before Slack is called (D4), on every verb including the inbox's Source and Delete. The global strings `urn:cap:slack:{read,post,react}` are gone. A channel name starts with a lowercase letter or digit, so a scope never starts with `-`, which ikigai-core reads as an exclusion nobody holds |
 | old threads (D6) | a line's channel id, matched to a declared channel's name on each request | code: a lookup (`Threads::id_of`), per request | an old line is served under the channel name its id now has: `threads.tsv` is parsed at start keyed by channel id, and `Threads::id_of` turns the name a request carries into its id against the configuration, per request. Nothing is rewritten, no code runs at start beyond parsing, and a line for an undeclared channel is kept and served by no name. Not a mapping rule: see the kept-code line |
 
 **Not needed:** a temporal space, because Slack is the record and the door keeps no history
@@ -72,10 +73,11 @@ and no task names it. Reads are fresh today only because nothing caches them.
 
 **Sealed.** The old `urn:slack:thread:{key}`, `urn:slack:thread:{key}:reaction:{name}` and
 `urn:cap:slack:{read,post,react}` are to be answered by nothing, with no alias (see
-Variances). As built, `serve.rs` still binds both old names and checks the global
-capabilities. Task 4.1 removes the global capabilities; no task yet removes the old thread
-and reaction bindings or writes the fitness function `design.md` names, which will keep them
-out of `artifacts/` once it exists. Slack's channel ids never appear in a name or a
+Variances). As built, `serve.rs` binds neither old name and checks no global capability, and
+`urn:space:{name}`, the intray behind an inbox, is not served either. Task 4.1 removed them and
+wrote the fitness function `design.md` names: `tests/test_old_names.py` keeps the old names out
+of `artifacts/`, and the door's `cargo test` asks the kernel that nothing is bound there.
+Slack's channel ids never appear in a name or a
 representation: a channel is named by the host's name, and a thread's JSON carries no
 channel. A message timestamp appears in one place, by design (D3): a minted key is its
 opening message's Slack timestamp, `m-<seconds>-<micros>`, so the timestamp is in that
@@ -138,11 +140,10 @@ plainly that it could and is not yet:
   as data (`AliasTable`, `Kernel::with_aliases`): an alias passes the caller's capability
   through to the space, and the inbox spec requires the check for
   `urn:cap:slack:channel:{name}:read` at the inbox's own name, which the handler is the
-  place for (task 4.1). The handler also carries `in` into `content` for a piped Sink.
+  place for (task 4.1). The handler serves Source and Delete only; it refuses a Sink.
 - The capability check is code in the door because the scope is per channel and the kernel's
-  check is per space. Pending task 4.1: it will reduce the caller's capability to the three
-  strings for the named channel, for the inbox's Source and Delete as for the Slack verbs;
-  as built it reduces to the three global strings. Whether the hub can grant a templated
+  check is per space. It requires the three strings for the named channel, for the inbox's
+  Source and Delete (`read`) as for the Slack verbs. Whether the hub can grant a templated
   family is not this change's (D4).
 - The catch-all (`ChannelEndpoint`, `urn:slack:channel:{rest}`) is code because a URI
   template has no notion of a declared set of values; the set itself is data, from the
@@ -165,8 +166,6 @@ plainly that it could and is not yet:
 
 **Open.** Compositions the design does not decide, left open rather than invented:
 
-- Whether `urn:space:{name}`, the intray space behind a channel's inbox, stays reachable
-  beside `urn:slack:channel:{name}:inbox` or is sealed. The kernel as built serves both.
 - Whether a channel's threads become a name (a list of a channel's keys). In this change a
   thread is reached only by its key, and the map line is internal.
 - Whether the inbox tuple becomes a template fill. It is built by `turtle` in code; a
