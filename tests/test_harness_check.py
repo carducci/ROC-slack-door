@@ -829,6 +829,16 @@ class GuideTextTest(unittest.TestCase):
                     self.problems("ask-dax-continue-draft"),
                 )
 
+    def test_a_stated_in_path_that_comes_back_by_the_checkout_name_fails(self) -> None:
+        # The copy is named `repo`, so `../repo/AGENTS.md` resolves back inside it. The answer must
+        # not depend on the checkout's directory name (ledger item 233).
+        name = f"../{self.repo.name}/AGENTS.md"
+        self.guide("ask-dax-continue-draft", stated_in=name)
+        self.assertEqual(
+            [f"{GUIDES}ask-dax-continue-draft: statedIn {name!r}, which is outside this repository"],
+            self.problems("ask-dax-continue-draft"),
+        )
+
     def test_a_refused_symlink_skips_only_its_own_case(self) -> None:
         # ikigai-slack#241: Windows without Developer Mode or administrator rights refuses a
         # symlink with WinError 1314, and the case that needs one errored. Nothing here runs on
@@ -1024,8 +1034,11 @@ CONTROLS = "urn:iki:harness:starter:control:"
 
 
 class ControlCodeTest(unittest.TestCase):
-    """A control's enforcedAt names a file inside this repository, compared by what it
-    resolves to, as a guide's statedIn is (ikigai-slack#193)."""
+    """A control's enforcedAt names a file inside this repository, as a guide's statedIn does
+    (ikigai-slack#193). Any `..` segment, by `/` or `\\`, is refused as written, before anything
+    is resolved, with the reason "has a `..` segment" (or "is outside this repository" when it
+    leaves the root); otherwise it is compared by what it resolves to, so a symlink is still
+    judged by its resolved target."""
 
     def setUp(self) -> None:
         self.tmp = tempfile.TemporaryDirectory()
@@ -1076,6 +1089,16 @@ class ControlCodeTest(unittest.TestCase):
             [f"{CONTROLS}ci-checks: enforcedAt {where}, and {where} has a `..` segment"],
             self.enforced_at(where),
         )
+
+    def test_a_backslash_dot_dot_segment_is_refused_for_its_own_reason_on_every_platform(self) -> None:
+        # On Windows `\` separates; on Linux `..\repo\x` is one file name. The reason tells a
+        # split on `[\\/]` from a split on `/` alone, which "is not in this repository" would not.
+        for where, reason in (
+            (f"..\\{self.repo.name}\\.github\\workflows\\ci.yml", "is outside this repository"),
+            ("tools\\..\\AGENTS.md", "has a `..` segment"),
+        ):
+            with self.subTest(where=where):
+                self.assertEqual((None, reason), harness.repo_file(self.repo, where))
 
     def test_an_absolute_enforced_at_path_is_not_relative_to_the_repository(self) -> None:
         # Refused whether it names a file outside the repository or inside, as statedIn is, and
