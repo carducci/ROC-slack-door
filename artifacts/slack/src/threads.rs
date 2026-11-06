@@ -860,6 +860,20 @@ mod tests {
     }
 
     #[test]
+    fn two_map_lines_for_one_channel_and_key_are_refused_on_open_and_the_file_is_unchanged() {
+        // record never writes two lines for one slot, so a file that holds two is not the door's:
+        // refusing it keeps the first thread from being dropped by the next save.
+        let text = "k\tC1\t1700000100.000001\nk\tC1\t1700000200.000001\n";
+        let dir = legacy_dir("duplicate-slot", text);
+        let err = Threads::open(&dir, "C1", FakeSlack::new()).err().unwrap();
+        assert_eq!(err.kind(), io::ErrorKind::InvalidData);
+        let message = err.to_string();
+        assert!(message.contains("\"k\""), "{message}");
+        assert!(message.contains("line 1") && message.contains("line 2"), "{message}");
+        assert_eq!(fs::read_to_string(dir.join(MAP_FILE)).unwrap(), text);
+    }
+
+    #[test]
     fn a_map_line_whose_channel_id_has_a_control_character_is_kept_after_open_and_a_save() {
         // Such a line reads back the same, and only an undeclared channel can have one: design
         // D6 keeps it, as it keeps every line for an undeclared channel.
