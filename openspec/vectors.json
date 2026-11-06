@@ -22,7 +22,7 @@
       "id": "urn:openspec:spec:configuration:requirement:secrets-never-leave-the-door:scenario:describing-a-thread",
       "steps": [
         {
-          "describe": "urn:slack:thread:{key}"
+          "describe": "urn:slack:channel:{name}:thread:{key}"
         }
       ]
     },

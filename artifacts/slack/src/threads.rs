@@ -6,8 +6,10 @@ use std::fs;
 use std::io::{self, Write};
 use std::path::{Path, PathBuf};
 
+use ikigai_core::Capability;
+
 use crate::{
-    check_key, check_reaction, check_text, is_slack_ts, Entry, Grants, Refusal, SlackTransport,
+    check_key, check_reaction, check_text, is_slack_ts, require, Entry, Refusal, SlackTransport,
     TransportError, POST, READ, REACT,
 };
 
@@ -109,22 +111,33 @@ impl<T: SlackTransport> Threads<T> {
         self.channels[0].1.clone()
     }
 
+    /// The name of the channel the unscoped calls use.
+    fn default_name(&self) -> String {
+        self.channels[0].0.clone()
+    }
+
     /// `write` in the declared channel `channel`.
     pub fn write_in(
         &mut self,
-        grants: &Grants,
+        capability: &Capability,
         channel: &str,
         key: &str,
         text: &str,
     ) -> Result<(), ThreadError> {
         let id = self.id_of(channel)?;
-        self.write_at(grants, &id, key, text)
+        require(capability, channel, POST).map_err(ThreadError::Refused)?;
+        self.write_at(&id, key, text)
     }
 
     /// Posts `text` as a new top-level message in the declared channel `channel`, in no thread.
-    pub fn announce(&mut self, grants: &Grants, channel: &str, text: &str) -> Result<(), ThreadError> {
+    pub fn announce(
+        &mut self,
+        capability: &Capability,
+        channel: &str,
+        text: &str,
+    ) -> Result<(), ThreadError> {
         let id = self.id_of(channel)?;
-        grants.require(POST).map_err(ThreadError::Refused)?;
+        require(capability, channel, POST).map_err(ThreadError::Refused)?;
         check_text(text).map_err(ThreadError::Refused)?;
         self.transport.post(&id, None, text).map_err(from_transport)?;
         Ok(())
@@ -133,29 +146,24 @@ impl<T: SlackTransport> Threads<T> {
     /// `read` in the declared channel `channel`.
     pub fn read_in(
         &mut self,
-        grants: &Grants,
+        capability: &Capability,
         channel: &str,
         key: &str,
     ) -> Result<Vec<Entry>, ThreadError> {
         let id = self.id_of(channel)?;
-        self.read_at(grants, &id, key)
+        require(capability, channel, READ).map_err(ThreadError::Refused)?;
+        self.read_at(&id, key)
     }
 
     /// Writes `text` to the thread `key` names. A key with no thread opens one as a new top-level
     /// message and records it; a key with a thread replies in it.
-    pub fn write(&mut self, grants: &Grants, key: &str, text: &str) -> Result<(), ThreadError> {
-        let id = self.default_id();
-        self.write_at(grants, &id, key, text)
+    pub fn write(&mut self, capability: &Capability, key: &str, text: &str) -> Result<(), ThreadError> {
+        let (id, name) = (self.default_id(), self.default_name());
+        require(capability, &name, POST).map_err(ThreadError::Refused)?;
+        self.write_at(&id, key, text)
     }
 
-    fn write_at(
-        &mut self,
-        grants: &Grants,
-        channel: &str,
-        key: &str,
-        text: &str,
-    ) -> Result<(), ThreadError> {
-        grants.require(POST).map_err(ThreadError::Refused)?;
+    fn write_at(&mut self, channel: &str, key: &str, text: &str) -> Result<(), ThreadError> {
         check_key(key).map_err(ThreadError::Refused)?;
         check_text(text).map_err(ThreadError::Refused)?;
         let parent = self.threads.get(&slot(channel, key)).map(|thread| thread.ts.clone());
@@ -203,37 +211,31 @@ impl<T: SlackTransport> Threads<T> {
     /// when `add` is false. A key with no thread is refused before Slack is called.
     pub fn react(
         &mut self,
-        grants: &Grants,
+        capability: &Capability,
         key: &str,
         name: &str,
         add: bool,
     ) -> Result<(), ThreadError> {
-        let id = self.default_id();
-        self.react_at(grants, &id, key, name, add)
+        let (id, channel) = (self.default_id(), self.default_name());
+        require(capability, &channel, REACT).map_err(ThreadError::Refused)?;
+        self.react_at(&id, key, name, add)
     }
 
     /// `react` in the declared channel `channel`.
     pub fn react_in(
         &mut self,
-        grants: &Grants,
+        capability: &Capability,
         channel: &str,
         key: &str,
         name: &str,
         add: bool,
     ) -> Result<(), ThreadError> {
         let id = self.id_of(channel)?;
-        self.react_at(grants, &id, key, name, add)
+        require(capability, channel, REACT).map_err(ThreadError::Refused)?;
+        self.react_at(&id, key, name, add)
     }
 
-    fn react_at(
-        &mut self,
-        grants: &Grants,
-        channel: &str,
-        key: &str,
-        name: &str,
-        add: bool,
-    ) -> Result<(), ThreadError> {
-        grants.require(REACT).map_err(ThreadError::Refused)?;
+    fn react_at(&mut self, channel: &str, key: &str, name: &str, add: bool) -> Result<(), ThreadError> {
         check_key(key).map_err(ThreadError::Refused)?;
         check_reaction(name).map_err(ThreadError::Refused)?;
         let thread = self
@@ -271,28 +273,33 @@ impl<T: SlackTransport> Threads<T> {
     }
 
     /// Whether the key names a thread the door has opened.
-    pub fn exists(&self, grants: &Grants, key: &str) -> Result<bool, ThreadError> {
-        grants.require(READ).map_err(ThreadError::Refused)?;
+    pub fn exists(&self, capability: &Capability, key: &str) -> Result<bool, ThreadError> {
+        require(capability, &self.default_name(), READ).map_err(ThreadError::Refused)?;
         check_key(key).map_err(ThreadError::Refused)?;
         Ok(self.threads.contains_key(&slot(&self.default_id(), key)))
     }
 
     /// `exists` in the declared channel `channel`.
-    pub fn exists_in(&self, grants: &Grants, channel: &str, key: &str) -> Result<bool, ThreadError> {
+    pub fn exists_in(
+        &self,
+        capability: &Capability,
+        channel: &str,
+        key: &str,
+    ) -> Result<bool, ThreadError> {
         let id = self.id_of(channel)?;
-        grants.require(READ).map_err(ThreadError::Refused)?;
+        require(capability, channel, READ).map_err(ThreadError::Refused)?;
         check_key(key).map_err(ThreadError::Refused)?;
         Ok(self.threads.contains_key(&slot(&id, key)))
     }
 
     /// The conversation the key names, the opening message first.
-    pub fn read(&mut self, grants: &Grants, key: &str) -> Result<Vec<Entry>, ThreadError> {
-        let id = self.default_id();
-        self.read_at(grants, &id, key)
+    pub fn read(&mut self, capability: &Capability, key: &str) -> Result<Vec<Entry>, ThreadError> {
+        let (id, name) = (self.default_id(), self.default_name());
+        require(capability, &name, READ).map_err(ThreadError::Refused)?;
+        self.read_at(&id, key)
     }
 
-    fn read_at(&mut self, grants: &Grants, channel: &str, key: &str) -> Result<Vec<Entry>, ThreadError> {
-        grants.require(READ).map_err(ThreadError::Refused)?;
+    fn read_at(&mut self, channel: &str, key: &str) -> Result<Vec<Entry>, ThreadError> {
         check_key(key).map_err(ThreadError::Refused)?;
         let thread = self
             .threads
@@ -399,8 +406,22 @@ mod tests {
         dir
     }
 
-    fn all() -> Grants {
-        Grants::all()
+    fn all() -> Capability {
+        Capability::root()
+    }
+
+    /// A caller holding only `action` in the channel `name`.
+    fn only(name: &str, action: &str) -> Capability {
+        Capability::scoped([crate::scope(name, action)])
+    }
+
+    /// A door over `gonk-chat` and `fixme`, for the tests of per-channel capabilities.
+    fn two_channels(name: &str) -> Threads<FakeSlack> {
+        let channels = [
+            ("gonk-chat".to_owned(), "C1".to_owned()),
+            ("fixme".to_owned(), "C2".to_owned()),
+        ];
+        Threads::open_channels(&scratch(name), &channels, FakeSlack::new()).unwrap()
     }
 
     /// A transport that panics when called, for a test that nothing may reach Slack.
@@ -635,22 +656,42 @@ mod tests {
 
     #[test]
     fn posting_without_the_post_capability_is_refused_and_nothing_is_posted() {
-        let dir = scratch("no-post");
-        let mut threads = Threads::open(&dir, "C1", FakeSlack::new()).unwrap();
-        let read_only = Grants::new([READ]);
-        let err = threads.write(&read_only, "carducci-54", "Opening").unwrap_err();
-        assert!(matches!(err, ThreadError::Refused(Refusal::NotGranted(POST))));
+        let mut threads = two_channels("no-post");
+        let err = threads
+            .write_in(&only("gonk-chat", READ), "gonk-chat", "carducci-54", "Opening")
+            .unwrap_err();
+        assert!(matches!(err, ThreadError::Refused(Refusal::NotGranted(ref s)) if s == "urn:cap:slack:channel:gonk-chat:post"));
         assert!(threads.transport().posts().is_empty());
     }
 
     #[test]
+    fn a_capability_for_another_channel_admits_nothing_here() {
+        let mut threads = two_channels("other-channel");
+        let post = only("gonk-chat", POST);
+        let err = threads.write_in(&post, "fixme", "fixme-1", "Opening").unwrap_err();
+        assert!(matches!(err, ThreadError::Refused(Refusal::NotGranted(ref s)) if s == "urn:cap:slack:channel:fixme:post"));
+        let err = threads.announce(&post, "fixme", "Hello").unwrap_err();
+        assert!(matches!(err, ThreadError::Refused(Refusal::NotGranted(_))));
+        assert!(threads.transport().posts().is_empty());
+        threads.write_in(&post, "gonk-chat", "k", "Opening").unwrap();
+        for (action, err) in [
+            (READ, threads.read_in(&only("gonk-chat", READ), "fixme", "k").unwrap_err()),
+            (READ, threads.exists_in(&only("gonk-chat", READ), "fixme", "k").unwrap_err()),
+            (REACT, threads.react_in(&only("gonk-chat", REACT), "fixme", "k", "tada", true).unwrap_err()),
+        ] {
+            let want = format!("urn:cap:slack:channel:fixme:{action}");
+            assert!(matches!(err, ThreadError::Refused(Refusal::NotGranted(ref s)) if *s == want), "{err:?}");
+        }
+    }
+
+    #[test]
     fn reacting_without_the_react_capability_is_refused_and_nothing_is_added() {
-        let dir = scratch("no-react");
-        let mut threads = Threads::open(&dir, "C1", FakeSlack::new()).unwrap();
-        threads.write(&all(), "carducci-54", "Opening").unwrap();
-        let read_only = Grants::new([READ]);
-        let err = threads.react(&read_only, "carducci-54", "tada", true).unwrap_err();
-        assert!(matches!(err, ThreadError::Refused(Refusal::NotGranted(REACT))));
+        let mut threads = two_channels("no-react");
+        threads.write_in(&all(), "gonk-chat", "carducci-54", "Opening").unwrap();
+        let err = threads
+            .react_in(&only("gonk-chat", READ), "gonk-chat", "carducci-54", "tada", true)
+            .unwrap_err();
+        assert!(matches!(err, ThreadError::Refused(Refusal::NotGranted(ref s)) if s == "urn:cap:slack:channel:gonk-chat:react"));
         assert!(threads.transport().reactions().is_empty());
     }
 
@@ -877,11 +918,11 @@ mod tests {
 
     #[test]
     fn reading_without_the_read_capability_is_refused() {
-        let dir = scratch("no-read");
-        let mut threads = Threads::open(&dir, "C1", FakeSlack::new()).unwrap();
-        threads.write(&all(), "carducci-54", "Opening").unwrap();
-        let post_only = Grants::new([POST]);
-        let err = threads.read(&post_only, "carducci-54").unwrap_err();
-        assert!(matches!(err, ThreadError::Refused(Refusal::NotGranted(READ))));
+        let mut threads = two_channels("no-read");
+        threads.write_in(&all(), "gonk-chat", "carducci-54", "Opening").unwrap();
+        let err = threads
+            .read_in(&only("gonk-chat", POST), "gonk-chat", "carducci-54")
+            .unwrap_err();
+        assert!(matches!(err, ThreadError::Refused(Refusal::NotGranted(ref s)) if s == "urn:cap:slack:channel:gonk-chat:read"));
     }
 }
