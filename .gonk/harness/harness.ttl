@@ -2,7 +2,10 @@
 # place this repository's tools enforce one as a sensor. Committed. Assembled by
 # ikigai-gonk-starter's tools/new.py from profiles/harness/<section>.ttl, one fragment per
 # AGENTS.md section, exactly as AGENTS.md is assembled, so it describes these profiles and
-# nothing else: solo, workers, spec.
+# nothing else: solo, workers, spec. Two sections come from no profile: the four Ask Dax guides
+# (team sections: ask-dax.md) and the three design resource-first guides (team sections:
+# design-resource-first.md), taken from ikigraph's artifacts/team/agents-sections. Each sits
+# under its own banner, below the profiles, and its statedIn still names AGENTS.md.
 #
 # Terms: .gonk/harness/vocabulary.ttl. Firings: .gonk/state/harness/firings.log (git-ignored).
 # `python3 tools/harness.py check` holds this file to the code and to AGENTS.md;
@@ -347,34 +350,6 @@ guide:one-agent-per-repository a harness:Guide ;
     harness:direction harness:feedforward ; harness:execution harness:inferential ;
     harness:stage harness:runtime ; harness:category harness:authoritySafety .
 
-guide:ask-dax-dont-guess a harness:Guide ;
-    rdfs:label "stop and ask, don't guess" ;
-    rdfs:comment "When the task contradicts the code or the spec, needs a decision it doesn't make, or would change files outside its scope, `stop and ask Dax` rather than guess." ;
-    harness:statedIn "AGENTS.md" ; harness:section "Ask Dax, don't guess" ;
-    harness:direction harness:feedforward ; harness:execution harness:inferential ;
-    harness:stage harness:runtime ; harness:category harness:authoritySafety .
-
-guide:ask-dax-draft-pr a harness:Guide ;
-    rdfs:label "a worker's pull request is a draft" ;
-    rdfs:comment "A worker opens its pull request as a draft with `gh pr create --draft` and never marks it ready for review." ;
-    harness:statedIn "AGENTS.md" ; harness:section "Ask Dax, don't guess" ;
-    harness:direction harness:feedforward ; harness:execution harness:inferential ;
-    harness:stage harness:runtime ; harness:category harness:authoritySafety .
-
-guide:ask-dax-question-format a harness:Guide ;
-    rdfs:label "a question for Dax" ;
-    rdfs:comment "To ask, commit and push, then put one question in the draft's description and in the report as `Question for Dax:`, with what raised it and the options and the preferred one, and stop." ;
-    harness:statedIn "AGENTS.md" ; harness:section "Ask Dax, don't guess" ;
-    harness:direction harness:feedforward ; harness:execution harness:inferential ;
-    harness:stage harness:runtime ; harness:category harness:authoritySafety .
-
-guide:ask-dax-continue-draft a harness:Guide ;
-    rdfs:label "continue a draft pull request" ;
-    rdfs:comment "When the dispatcher's notes say `Continue draft PR #N`, merge that draft's branch into yours first, with the subject `<risk> m Merge <draft branch> (ledger item <your item>)`, and begin the new draft's description with `Supersedes PR #N`." ;
-    harness:statedIn "AGENTS.md" ; harness:section "Ask Dax, don't guess" ;
-    harness:direction harness:feedforward ; harness:execution harness:inferential ;
-    harness:stage harness:runtime ; harness:category harness:authoritySafety .
-
 ctl:worker-refuses-root a harness:Control ;
     rdfs:label "worker: never as root" ;
     rdfs:comment "`tools/worker.py run` refuses to start as root: a worker runs as an account of its own, which is its boundary (worker/README.md)." ;
@@ -564,7 +539,37 @@ ctl:edit-hook-unreadable-input a harness:Control ;
     harness:statedBy guide:claim-before-write ;
     harness:firedBy test:test_harness:SensorsFire.test_edit_hook_unreadable_input .
 
-# ── design-resource-first (AGENTS.md "Design resource-first")
+# ── team sections: ask-dax.md (ikigraph artifacts/team/agents-sections)
+
+guide:ask-dax-dont-guess a harness:Guide ;
+    rdfs:label "stop and ask, don't guess" ;
+    rdfs:comment "When the task contradicts the code or the spec, needs a decision it doesn't make, or would change files outside its scope, `stop and ask Dax` rather than guess." ;
+    harness:statedIn "AGENTS.md" ; harness:section "Ask Dax, don't guess" ;
+    harness:direction harness:feedforward ; harness:execution harness:inferential ;
+    harness:stage harness:runtime ; harness:category harness:authoritySafety .
+
+guide:ask-dax-draft-pr a harness:Guide ;
+    rdfs:label "a worker's pull request is a draft" ;
+    rdfs:comment "A worker opens its pull request as a draft with `gh pr create --draft` and never marks it ready for review." ;
+    harness:statedIn "AGENTS.md" ; harness:section "Ask Dax, don't guess" ;
+    harness:direction harness:feedforward ; harness:execution harness:inferential ;
+    harness:stage harness:runtime ; harness:category harness:authoritySafety .
+
+guide:ask-dax-question-format a harness:Guide ;
+    rdfs:label "a question for Dax" ;
+    rdfs:comment "To ask, commit and push, then put one question in the draft's description and in the report as `Question for Dax:`, with what raised it and the options and the preferred one, and stop." ;
+    harness:statedIn "AGENTS.md" ; harness:section "Ask Dax, don't guess" ;
+    harness:direction harness:feedforward ; harness:execution harness:inferential ;
+    harness:stage harness:runtime ; harness:category harness:authoritySafety .
+
+guide:ask-dax-continue-draft a harness:Guide ;
+    rdfs:label "continue a draft pull request" ;
+    rdfs:comment "When the dispatcher's notes say `Continue draft PR #N`, merge that draft's branch into yours first, with the subject `<risk> m Merge <draft branch> (ledger item <your item>)`, and begin the new draft's description with `Supersedes PR #N`." ;
+    harness:statedIn "AGENTS.md" ; harness:section "Ask Dax, don't guess" ;
+    harness:direction harness:feedforward ; harness:execution harness:inferential ;
+    harness:stage harness:runtime ; harness:category harness:authoritySafety .
+
+# ── team sections: design-resource-first.md (ikigraph artifacts/team/agents-sections)
 
 guide:resource-first-pass a harness:Guide ;
     rdfs:label "design resource-first: names first, code last" ;

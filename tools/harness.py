@@ -14,8 +14,10 @@ and acts at a **stage** of a change's life.
 THE GRAPH. `.gonk/harness/harness.ttl` describes every control this repository's process has,
 assembled by `tools/new.py` from `profiles/harness/<section>.ttl`, one fragment per AGENTS.md
 section, exactly as AGENTS.md is assembled from `profiles/sections/<section>.md`: a repository
-describes the rules it follows and the sensors it carries, and nothing else. The terms are
-`.gonk/harness/vocabulary.ttl`, `https://ikigai-rs.dev/ns/harness#` (`harness:`). Every control
+describes the rules it follows and the sensors it carries, and nothing else, bar the team
+sections: the four Ask Dax and three design resource-first guides come from ikigraph's
+artifacts/team/agents-sections, not from a profile, and sit under banners of their own. The terms
+are `.gonk/harness/vocabulary.ttl`, `https://ikigai-rs.dev/ns/harness#` (`harness:`). Every control
 has a stable IRI, `urn:iki:harness:starter:control:{id}` (a guide `…:guide:{id}`), whose id
 never changes: firings recorded under it stay joined to it. No blank nodes.
 
