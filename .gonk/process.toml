@@ -1,10 +1,13 @@
 # How this repository's team works: the process profiles it was generated with, and what
-# each one asks of it. Committed. Written by ikigai-gonk-starter's tools/new.py from its
-# profiles/; `python3 tools/gonk.py init` and `status` report it and read nothing else to
-# decide it. AGENTS.md holds the rules of exactly these profiles, so change both together.
-# Except two sections, which are the team's rules and belong to no profile: "Ask Dax, don't
-# guess" and "Design resource-first". The team adds those to AGENTS.md (ikigraph's
-# artifacts/team/agents_sections.py), outside the profiles, so a profile check skips them.
+# each one asks of it. Committed. The profile part was written by ikigai-gonk-starter's
+# tools/new.py from its profiles/; `python3 tools/gonk.py init` and `status` report it and read
+# nothing else to decide it. AGENTS.md holds the rules of exactly these profiles, so change both
+# together. Except three rule blocks that belong to no profile, which were added in this
+# repository, not by tools/new.py: the sections "Ask Dax, don't guess" and "Design
+# resource-first" (the team adds them from ikigraph's artifacts/team/agents_sections.py), and the
+# "Every commit uses Arlo's Commit Notation, as a microcommit" block under "4. Every change
+# through a pull request with green CI". `python3 tools/harness.py check` requires a guide in
+# .gonk/harness/harness.ttl for each of the two sections.
 version = 1
 process = ["solo", "workers", "spec"]
 hooks = ["claude:require-claim"]
