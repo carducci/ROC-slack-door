@@ -1304,6 +1304,39 @@ class ControlCodeTest(unittest.TestCase):
                 expected = [] if ok else [f"{CONTROLS}ci-checks: enforcedAt {where}, and {path} has no {name}"]
                 self.assertEqual(expected, self.enforced_at(where))
 
+    def assert_recipes(self, justfile: str, expected: dict[str, bool]) -> None:
+        (self.repo / ".github/justfile").write_text(justfile)
+        for name, ok in expected.items():
+            where = f".github/justfile#{name}"
+            with self.subTest(where=where):
+                shutil.copy(ROOT / ".gonk/harness/harness.ttl", self.repo / ".gonk/harness/harness.ttl")
+                want = [] if ok else [f"{CONTROLS}ci-checks: enforcedAt {where}, and .github/justfile has no {name}"]
+                self.assertEqual(want, self.enforced_at(where))
+
+    def test_two_triple_quoted_strings_leave_the_recipe_between_them(self) -> None:
+        # ikigai-slack#308: a greedy string pattern hides `real`, which sits between two strings.
+        self.assert_recipes(
+            "a := '''\nsq: x\n'''\n\nreal:\n    echo\n\nb := '''\nsq2: y\n'''\n",
+            {"real": True, "sq": False, "sq2": False},
+        )
+
+    def test_a_quote_triple_outside_a_string_opens_none(self) -> None:
+        # ikigai-slack#307: in a comment, a one-line string, a default or a recipe body.
+        self.assert_recipes(
+            "# a ''' in a comment\nfirst:\n    echo\n\none := \"a'''b\"\n\nreal1:\n    echo\n\n"
+            "dflt x='\"\"\"':\n    echo\n\nbody:\n    echo '''\n\nreal2:\n    echo\n",
+            {"first": True, "real1": True, "dflt": True, "body": True, "real2": True},
+        )
+
+    def test_a_ghost_recipe_in_a_string_after_a_quote_triple_is_not_a_recipe(self) -> None:
+        # ikigai-slack#307: a `'''` in a comment or a one-line string before the real string
+        # shifted the pairing; and `\\"""` is an escape, not a close.
+        self.assert_recipes(
+            "# '''\nx := '''\nghost1: a\n'''\n\ny := \"it'''s\" + \"\"\"\n  ghost2: b\n\"\"\"\n\n"
+            'z := """\n\\"""\nghost3: c\n"""\n\nreal:\n    echo\n',
+            {"ghost1": False, "ghost2": False, "ghost3": False, "real": True},
+        )
+
     def test_a_backtick_default_and_an_escaped_quote_may_hold_a_colon_equals(self) -> None:
         # ikigai-slack#275: a backtick default is a quote kind too, and a double-quoted default
         # may hold an escaped quote before its `:=`.
