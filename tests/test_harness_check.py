@@ -3,6 +3,7 @@ and a guide and the AGENTS.md section it cites agree on the words they quote."""
 
 from __future__ import annotations
 
+import ast
 import builtins
 import contextlib
 import errno
@@ -312,6 +313,71 @@ class WindowsNamesTest(unittest.TestCase):
             # A name Windows takes still goes through CopyFile2, so the guard changes nothing else.
             self.assertEqual(at / "fine", Path(shutil.copy2(at / "ok", at / "fine")))
             self.assertEqual([str(at / "fine")], copied)
+
+
+class CodeEncodingTest(unittest.TestCase):
+    """A file under tools/ is read as Python reads it: its coding declaration decides, UTF-8 when
+    it has none. Only a file its declared encoding can't decode is refused (ikigai-slack#305)."""
+
+    def setUp(self) -> None:
+        self.tmp = tempfile.TemporaryDirectory()
+        self.repo = Path(self.tmp.name) / "repo"
+        shutil.copytree(ROOT, self.repo, ignore=shutil.ignore_patterns(".git", "target"))
+        self.assertEqual([], harness.check(self.repo), "the copy agrees before it is changed")
+
+    def tearDown(self) -> None:
+        self.tmp.cleanup()
+
+    def problems_for(self, data: bytes) -> list[str]:
+        (self.repo / "tools/m000.py").write_bytes(data)
+        return [p for p in harness.emissions(self.repo)[1] if "m000.py" in p]
+
+    def test_a_latin1_cookie_with_latin1_bytes_is_text(self) -> None:
+        # ikigai-slack#305: Python compiles this file, so the check must not refuse it.
+        data = b'# -*- coding: latin-1 -*-\nx = "caf\xe9"\n'
+        self.assertEqual([], self.problems_for(data))
+        self.assertEqual([], [p for p in harness.check(self.repo) if "m000.py" in p])
+
+    def test_a_bom_with_a_utf8_cookie_is_text(self) -> None:
+        self.assertEqual([], self.problems_for(b'\xef\xbb\xbf# -*- coding: utf-8 -*-\nx = "caf\xc3\xa9"\n'))
+
+    def refused(self, data: bytes) -> str:
+        found = self.problems_for(data)
+        self.assertEqual(1, len(found), found)
+        # What Python says of these same bytes is computed here, so no version's wording is pinned.
+        with self.assertRaises((SyntaxError, ValueError)) as said:
+            ast.parse(data, "tools/m000.py")
+        self.assertEqual(f"tools/m000.py can't be parsed ({said.exception})", found[0])
+        return found[0]
+
+    def test_a_utf8_file_with_latin1_bytes_is_refused_with_what_python_said(self) -> None:
+        self.refused(b'x = "caf\xe9"\n')
+
+    def test_an_unknown_declared_encoding_is_refused(self) -> None:
+        self.assertIn("no-such-codec", self.refused(b"# -*- coding: no-such-codec -*-\nx = 1\n"))
+
+    def test_a_non_text_codec_is_refused_not_a_traceback(self) -> None:
+        for codec in ("rot13", "hex", "base64"):
+            with self.subTest(codec=codec):
+                self.assertIn(codec, self.refused(f"# coding: {codec}\nx = 1\n".encode()))
+
+    def test_a_cookie_decoded_file_that_does_not_parse_is_refused(self) -> None:
+        self.refused(b"# coding: latin-1\ndef (\xe9:\n")
+
+    def test_a_utf8_file_that_does_not_parse_is_refused(self) -> None:
+        self.refused(b"def (:\n")
+
+    def test_a_nul_in_valid_utf8_is_refused_with_what_python_said(self) -> None:
+        self.refused(b"x = 1\x00\n")
+
+    def test_a_bom_with_a_latin1_cookie_is_refused_with_what_python_said(self) -> None:
+        self.refused(b"\xef\xbb\xbf# -*- coding: latin-1 -*-\nx = 1\n")
+
+    def test_one_bad_file_does_not_hide_another(self) -> None:
+        (self.repo / "tools/m001.py").write_bytes(b"x = '\xe9'\n")
+        (self.repo / "tools/m000.py").write_bytes(b"# coding: rot13\nx = 1\n")
+        bad = harness.emissions(self.repo)[1]
+        self.assertEqual(2, len([p for p in bad if "m00" in p]), bad)
 
 
 class HarnessCheckTest(unittest.TestCase):

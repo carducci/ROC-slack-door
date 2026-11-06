@@ -625,14 +625,17 @@ def emissions(repo: Path) -> tuple[list[tuple[str, str, str]], list[str]]:
         for path in sorted((repo / top).rglob("*.py")):
             rel = path.relative_to(repo).as_posix()
             try:
-                text = path.read_text(encoding="utf-8")
-            except UnicodeDecodeError:
-                bad.append(f"{rel} is not UTF-8 text")
-                continue
+                source = path.read_bytes()
             except OSError as e:
                 bad.append(f"{rel} can't be read ({e.strerror})")
                 continue
-            tree = ast.parse(text, rel)
+            try:
+                # Bytes, as Python reads them: the BOM and a PEP 263 cookie decide the encoding
+                # (ikigai-slack#305), and what Python says of a file it refuses is the problem.
+                tree = ast.parse(source, rel)
+            except (SyntaxError, ValueError, MemoryError, RecursionError) as e:
+                bad.append(f"{rel} can't be parsed ({e})")
+                continue
             found_here, bad_here = _emitters_in(tree, rel)
             found += found_here
             bad += bad_here
