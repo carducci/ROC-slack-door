@@ -380,6 +380,37 @@ class CodeEncodingTest(unittest.TestCase):
         self.assertEqual(2, len([p for p in bad if "m00" in p]), bad)
 
 
+class TurtleEncodingTest(unittest.TestCase):
+    """A Turtle file is UTF-8, and a leading byte order mark is not a term of it (ikigai-slack#304)."""
+
+    def setUp(self) -> None:
+        self.tmp = tempfile.TemporaryDirectory()
+        self.repo = Path(self.tmp.name) / "repo"
+        shutil.copytree(ROOT, self.repo, ignore=shutil.ignore_patterns(".git", "target"))
+        self.assertEqual([], harness.check(self.repo), "the copy agrees before it is changed")
+
+    def tearDown(self) -> None:
+        self.tmp.cleanup()
+
+    def with_bom(self, name: str) -> None:
+        path = self.repo / ".gonk" / "harness" / name
+        path.write_bytes(b"\xef\xbb\xbf" + path.read_bytes())
+
+    def test_a_bom_on_harness_ttl_is_not_refused(self) -> None:
+        self.with_bom("harness.ttl")
+        self.assertEqual([], harness.check(self.repo))
+
+    def test_a_bom_on_vocabulary_ttl_is_not_refused(self) -> None:
+        self.with_bom("vocabulary.ttl")
+        self.assertEqual([], harness.check(self.repo))
+
+    def test_a_bom_reads_the_same_triples(self) -> None:
+        path = self.repo / ".gonk" / "harness" / "harness.ttl"
+        plain = harness.read_graph(path).triples
+        self.with_bom("harness.ttl")
+        self.assertEqual(plain, harness.read_graph(path).triples)
+
+
 class HarnessCheckTest(unittest.TestCase):
     def test_check_finds_nothing_wrong(self) -> None:
         problems = harness.check(ROOT)
