@@ -314,6 +314,45 @@ class WindowsNamesTest(unittest.TestCase):
             self.assertEqual([str(at / "fine")], copied)
 
 
+class CodeEncodingTest(unittest.TestCase):
+    """A file under tools/ is read as Python reads it: its coding declaration decides, UTF-8 when
+    it has none. Only a file its declared encoding can't decode is refused (ikigai-slack#305)."""
+
+    def setUp(self) -> None:
+        self.tmp = tempfile.TemporaryDirectory()
+        self.repo = Path(self.tmp.name) / "repo"
+        shutil.copytree(ROOT, self.repo, ignore=shutil.ignore_patterns(".git", "target"))
+        self.assertEqual([], harness.check(self.repo), "the copy agrees before it is changed")
+
+    def tearDown(self) -> None:
+        self.tmp.cleanup()
+
+    def problems_for(self, data: bytes) -> list[str]:
+        (self.repo / "tools/m000.py").write_bytes(data)
+        return [p for p in harness.emissions(self.repo)[1] if "m000.py" in p]
+
+    def test_a_latin1_cookie_with_latin1_bytes_is_text(self) -> None:
+        # ikigai-slack#305: Python compiles this file, so the check must not refuse it.
+        data = b'# -*- coding: latin-1 -*-\nx = "caf\xe9"\n'
+        self.assertEqual([], self.problems_for(data))
+        self.assertEqual([], [p for p in harness.check(self.repo) if "m000.py" in p])
+
+    def test_a_bom_with_a_utf8_cookie_is_text(self) -> None:
+        self.assertEqual([], self.problems_for(b'\xef\xbb\xbf# -*- coding: utf-8 -*-\nx = "caf\xc3\xa9"\n'))
+
+    def test_a_utf8_file_with_latin1_bytes_is_refused(self) -> None:
+        self.assertEqual(
+            ["tools/m000.py is not text in its declared encoding (UTF-8 when it declares none)"],
+            self.problems_for(b'x = "caf\xe9"\n'),
+        )
+
+    def test_an_unknown_declared_encoding_is_refused(self) -> None:
+        self.assertEqual(
+            ["tools/m000.py is not text in its declared encoding (UTF-8 when it declares none)"],
+            self.problems_for(b"# -*- coding: no-such-codec -*-\nx = 1\n"),
+        )
+
+
 class HarnessCheckTest(unittest.TestCase):
     def test_check_finds_nothing_wrong(self) -> None:
         problems = harness.check(ROOT)
