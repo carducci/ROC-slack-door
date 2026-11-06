@@ -439,6 +439,26 @@ mod tests {
         assert_eq!(threads.key_for("C2", "1.0").as_deref(), Some("two"));
     }
 
+    const NOT_CHANNEL_IDS: [&str; 12] =
+        ["C1-X", "C1#X", "C1.X", "C1:X", "C1_X", "c1", "C1x", "C 1", "C1!", "C/1", "C\u{a0}1", ""];
+
+    #[test]
+    fn a_slack_channel_id_is_upper_case_letters_and_digits_and_nothing_else() {
+        for id in NOT_CHANNEL_IDS {
+            assert!(!is_slack_channel_id(id), "{id:?}");
+        }
+        assert!(is_slack_channel_id("C0123ABCD"));
+    }
+
+    #[test]
+    fn open_channels_refuses_an_id_with_punctuation_or_lower_case() {
+        for id in NOT_CHANNEL_IDS {
+            let channels = [("a".to_owned(), id.to_owned())];
+            let result = Threads::open_channels(&scratch("bad-id"), &channels, FakeSlack::new());
+            assert_eq!(result.err().map(|e| e.kind()), Some(io::ErrorKind::InvalidInput), "{id:?}");
+        }
+    }
+
     #[test]
     fn open_channels_refuses_an_empty_channel_list() {
         let result = Threads::open_channels(&scratch("no-channels"), &[], FakeSlack::new());
