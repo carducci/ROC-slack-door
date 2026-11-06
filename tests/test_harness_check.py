@@ -1404,6 +1404,14 @@ class ControlCodeTest(unittest.TestCase):
                 self.assertEqual(1, len(problems), problems)
                 self.assertIn(reason, problems[0])
 
+    def test_a_py_file_with_a_bom_and_a_latin1_cookie_is_said_unparsable(self) -> None:
+        # ikigai-slack#302: PEP 263 refuses a BOM with a non-UTF-8 cookie; so must emissions.
+        path = self.repo / "tools/cookie.py"
+        path.write_bytes(b"\xef\xbb\xbf# -*- coding: latin-1 -*-\ndef main():\n    pass\n")
+        problems = [p for p in harness.check(self.repo) if p.startswith("tools/cookie.py can't be parsed (")]
+        self.assertEqual(1, len(problems), problems)
+        self.assertIn("can't be parsed", harness.undefined_in(path, "tools/cookie.py", "main"))
+
     def test_each_error_ast_parse_can_raise_is_said_not_raised(self) -> None:
         # ikigai-slack#303: one arm of the except for each of these; narrowing it fails one.
         (self.repo / "tools/deep.py").write_bytes(b"x = 1\n")
