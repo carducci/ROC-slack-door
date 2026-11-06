@@ -685,14 +685,10 @@ mod tests {
     /// Whether the kernel answers that nothing is bound at `iri`: its own `no endpoint resolved`
     /// answer, not the answer of any endpoint. `Err` carries what it answered instead.
     fn nothing_is_bound(kernel: &Kernel, verb: Verb, iri: &str) -> std::result::Result<(), String> {
-        let answer = match issue(kernel, verb, iri) {
-            Ok(_) => return Err(format!("{verb:?} {iri}: answered ok")),
-            Err(error) => error.to_string(),
-        };
-        if answer.contains(&format!("no endpoint resolved for {iri}")) {
-            Ok(())
-        } else {
-            Err(format!("{verb:?} {iri}: {answer}"))
+        match issue(kernel, verb, iri) {
+            Ok(_) => Err(format!("{verb:?} {iri}: answered ok")),
+            Err(Error::Unresolved(asked)) if asked.to_string() == iri => Ok(()),
+            Err(error) => Err(format!("{verb:?} {iri}: {error:?}")),
         }
     }
 
@@ -721,6 +717,33 @@ mod tests {
         let error = nothing_is_bound(&kernel, Verb::Exists, &iri).unwrap_err();
         assert!(error.contains("a thread reaction takes sink and delete"), "{error}");
         assert_eq!(nothing_is_bound(&kernel, Verb::Exists, &format!("{thread}:other")), Ok(()));
+    }
+
+    struct Echo;
+
+    #[async_trait]
+    impl Endpoint for Echo {
+        async fn invoke(&self, invocation: &Invocation<'_>) -> Result<Representation> {
+            Err(Error::Endpoint(format!("no endpoint resolved for {}", invocation.request.target)))
+        }
+
+        fn name(&self) -> &str {
+            "echo"
+        }
+    }
+
+    #[test]
+    fn the_unbound_check_fails_when_an_endpoint_echoes_the_unresolved_text() {
+        let thread = format!("urn:slack:{}:k", "thread");
+        let rebound = EndpointSpace::new().bind(
+            UriTemplate::parse(&format!("{thread}:reaction:{{reaction}}")).unwrap(),
+            Echo,
+        );
+        let kernel = Kernel::new(Arc::new(rebound));
+        let iri = format!("{thread}:reaction:x");
+        for verb in [Verb::Exists, Verb::Sink] {
+            assert!(nothing_is_bound(&kernel, verb, &iri).is_err(), "{verb:?}");
+        }
     }
 
     #[test]
