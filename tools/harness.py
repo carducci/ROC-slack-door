@@ -890,8 +890,11 @@ def repo_file(root: Path, name: str) -> tuple[Path | None, str]:
     """The file a guide's statedIn or a control's enforcedAt names, resolved against the
     repository's root (as vocabulary.ttl defines both), or None and why. Refused as not relative,
     on every platform, wherever it points: a name that starts with / or \\ (POSIX absolute, UNC),
-    or holds a colon (a drive letter, a URL, a colon in a directory's name). One that leaves the
-    repository through `..` or by a symlink names no file of it, and a NUL is no path at all.
+    or holds a colon (a drive letter, a URL, a colon in a directory's name). Any `..` segment, split
+    on `/` or `\\`, is refused as written, before anything is resolved: "is outside this
+    repository" when it leaves the root, else "has a `..` segment", even where it stays inside.
+    A symlink is still judged by its resolved target: one that leaves the repository names no
+    file of it. A NUL is no path at all.
     One that is in the repository but is no file is refused as what it is: a directory; a FIFO
     or a socket ("is not a file"); a symlink to nothing, or a symlink loop; a path the system
     won't let this process reach ("can't be read (<its reason>)", as read_sections words it);
