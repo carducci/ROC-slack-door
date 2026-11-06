@@ -60,6 +60,7 @@ import html
 import html.entities
 import itertools
 import os
+import posixpath
 import re
 import secrets
 import stat
@@ -904,6 +905,12 @@ def repo_file(root: Path, name: str) -> tuple[Path | None, str]:
         return None, "is not a path relative to this repository's root"
     if "\x00" in name:
         return None, "is not a path"
+    segments = re.split(r"[\\/]", name)
+    if ".." in segments:
+        lexical = posixpath.normpath("/".join(segments))
+        if lexical.split("/")[0] == "..":
+            return None, "is outside this repository"
+        return None, "has a `..` segment"
     link = root / name
     # Not strict: a loop or a dangling link is kept as written, and named by the stat below.
     path = Path(os.path.realpath(link))
