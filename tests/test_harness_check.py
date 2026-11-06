@@ -340,17 +340,40 @@ class CodeEncodingTest(unittest.TestCase):
     def test_a_bom_with_a_utf8_cookie_is_text(self) -> None:
         self.assertEqual([], self.problems_for(b'\xef\xbb\xbf# -*- coding: utf-8 -*-\nx = "caf\xc3\xa9"\n'))
 
-    def test_a_utf8_file_with_latin1_bytes_is_refused(self) -> None:
-        self.assertEqual(
-            ["tools/m000.py is not text in its declared encoding (UTF-8 when it declares none)"],
-            self.problems_for(b'x = "caf\xe9"\n'),
-        )
+    def refused(self, data: bytes) -> str:
+        found = self.problems_for(data)
+        self.assertEqual(1, len(found), found)
+        self.assertTrue(found[0].startswith("tools/m000.py can't be parsed ("), found[0])
+        return found[0]
+
+    def test_a_utf8_file_with_latin1_bytes_is_refused_with_what_python_said(self) -> None:
+        self.assertIn("utf-8", self.refused(b'x = "caf\xe9"\n'))
 
     def test_an_unknown_declared_encoding_is_refused(self) -> None:
-        self.assertEqual(
-            ["tools/m000.py is not text in its declared encoding (UTF-8 when it declares none)"],
-            self.problems_for(b"# -*- coding: no-such-codec -*-\nx = 1\n"),
-        )
+        self.assertIn("no-such-codec", self.refused(b"# -*- coding: no-such-codec -*-\nx = 1\n"))
+
+    def test_a_non_text_codec_is_refused_not_a_traceback(self) -> None:
+        for codec in ("rot13", "hex", "base64"):
+            with self.subTest(codec=codec):
+                self.assertIn(codec, self.refused(f"# coding: {codec}\nx = 1\n".encode()))
+
+    def test_a_cookie_decoded_file_that_does_not_parse_is_refused(self) -> None:
+        self.refused(b"# coding: latin-1\ndef (\xe9:\n")
+
+    def test_a_utf8_file_that_does_not_parse_is_refused(self) -> None:
+        self.refused(b"def (:\n")
+
+    def test_a_nul_in_valid_utf8_is_refused_with_what_python_said(self) -> None:
+        self.assertIn("null bytes", self.refused(b"x = 1\x00\n"))
+
+    def test_a_bom_with_a_latin1_cookie_is_refused_with_what_python_said(self) -> None:
+        self.assertIn("latin-1", self.refused(b"\xef\xbb\xbf# -*- coding: latin-1 -*-\nx = 1\n"))
+
+    def test_one_bad_file_does_not_hide_another(self) -> None:
+        (self.repo / "tools/m001.py").write_bytes(b"x = '\xe9'\n")
+        (self.repo / "tools/m000.py").write_bytes(b"# coding: rot13\nx = 1\n")
+        bad = harness.emissions(self.repo)[1]
+        self.assertEqual(2, len([p for p in bad if "m00" in p]), bad)
 
 
 class HarnessCheckTest(unittest.TestCase):
