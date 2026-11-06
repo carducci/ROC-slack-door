@@ -48,8 +48,9 @@ The configuration SHALL list the channels the door serves, each by a name of its
 lowercase letters, digits and `-`) with its Slack channel id and the Slack user ids of its
 speakers. The door MUST refuse to start when no channel is declared, when a name is invalid or
 declared twice, or when a channel has no id or no speakers, naming the channel. It MUST refuse to
-start when a channel's id holds a tab, newline or other control character, naming the channel
-and its setting. A name that is not declared SHALL be refused as `no-channel`, without calling
+start when a channel's id is not a Slack channel id: one or more upper-case letters and digits,
+and nothing else (so no empty id, space, tab, newline, other control character or no-break or
+zero-width character), naming the channel and its setting. A name that is not declared SHALL be refused as `no-channel`, without calling
 Slack.
 
 #### Scenario: Two channels
@@ -62,10 +63,15 @@ Slack.
 - **WHEN** the host declares `fixme` with an id and no speakers
 - **THEN** the door refuses to start, naming `fixme`
 
-#### Scenario: A channel id with a control character stops the start
+#### Scenario: A channel id that is not a Slack channel id stops the start
 
-- **WHEN** the host declares `fixme` with an id that holds a tab, newline or other control character
+- **WHEN** the host declares `fixme` with an id that holds a space, a tab, a newline, a no-break or zero-width character, or a lower-case letter, or the id is empty
 - **THEN** the door refuses to start, naming `fixme` and `SLACK_CHANNEL_FIXME_ID`, and nothing is posted
+
+#### Scenario: A Slack channel id starts
+
+- **WHEN** the host declares `fixme` with the id `C0123ABCD`
+- **THEN** the door starts, and the channel is served under `fixme`
 
 #### Scenario: An undeclared channel
 
