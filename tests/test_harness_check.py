@@ -3,6 +3,7 @@ and a guide and the AGENTS.md section it cites agree on the words they quote."""
 
 from __future__ import annotations
 
+import ast
 import builtins
 import contextlib
 import errno
@@ -312,6 +313,102 @@ class WindowsNamesTest(unittest.TestCase):
             # A name Windows takes still goes through CopyFile2, so the guard changes nothing else.
             self.assertEqual(at / "fine", Path(shutil.copy2(at / "ok", at / "fine")))
             self.assertEqual([str(at / "fine")], copied)
+
+
+class CodeEncodingTest(unittest.TestCase):
+    """A file under tools/ is read as Python reads it: its coding declaration decides, UTF-8 when
+    it has none. Only a file its declared encoding can't decode is refused (ikigai-slack#305)."""
+
+    def setUp(self) -> None:
+        self.tmp = tempfile.TemporaryDirectory()
+        self.repo = Path(self.tmp.name) / "repo"
+        shutil.copytree(ROOT, self.repo, ignore=shutil.ignore_patterns(".git", "target"))
+        self.assertEqual([], harness.check(self.repo), "the copy agrees before it is changed")
+
+    def tearDown(self) -> None:
+        self.tmp.cleanup()
+
+    def problems_for(self, data: bytes) -> list[str]:
+        (self.repo / "tools/m000.py").write_bytes(data)
+        return [p for p in harness.emissions(self.repo)[1] if "m000.py" in p]
+
+    def test_a_latin1_cookie_with_latin1_bytes_is_text(self) -> None:
+        # ikigai-slack#305: Python compiles this file, so the check must not refuse it.
+        data = b'# -*- coding: latin-1 -*-\nx = "caf\xe9"\n'
+        self.assertEqual([], self.problems_for(data))
+        self.assertEqual([], [p for p in harness.check(self.repo) if "m000.py" in p])
+
+    def test_a_bom_with_a_utf8_cookie_is_text(self) -> None:
+        self.assertEqual([], self.problems_for(b'\xef\xbb\xbf# -*- coding: utf-8 -*-\nx = "caf\xc3\xa9"\n'))
+
+    def refused(self, data: bytes) -> str:
+        found = self.problems_for(data)
+        self.assertEqual(1, len(found), found)
+        # What Python says of these same bytes is computed here, so no version's wording is pinned.
+        with self.assertRaises((SyntaxError, ValueError)) as said:
+            ast.parse(data, "tools/m000.py")
+        self.assertEqual(f"tools/m000.py can't be parsed ({said.exception})", found[0])
+        return found[0]
+
+    def test_a_utf8_file_with_latin1_bytes_is_refused_with_what_python_said(self) -> None:
+        self.refused(b'x = "caf\xe9"\n')
+
+    def test_an_unknown_declared_encoding_is_refused(self) -> None:
+        self.assertIn("no-such-codec", self.refused(b"# -*- coding: no-such-codec -*-\nx = 1\n"))
+
+    def test_a_non_text_codec_is_refused_not_a_traceback(self) -> None:
+        for codec in ("rot13", "hex", "base64"):
+            with self.subTest(codec=codec):
+                self.assertIn(codec, self.refused(f"# coding: {codec}\nx = 1\n".encode()))
+
+    def test_a_cookie_decoded_file_that_does_not_parse_is_refused(self) -> None:
+        self.refused(b"# coding: latin-1\ndef (\xe9:\n")
+
+    def test_a_utf8_file_that_does_not_parse_is_refused(self) -> None:
+        self.refused(b"def (:\n")
+
+    def test_a_nul_in_valid_utf8_is_refused_with_what_python_said(self) -> None:
+        self.refused(b"x = 1\x00\n")
+
+    def test_a_bom_with_a_latin1_cookie_is_refused_with_what_python_said(self) -> None:
+        self.refused(b"\xef\xbb\xbf# -*- coding: latin-1 -*-\nx = 1\n")
+
+    def test_one_bad_file_does_not_hide_another(self) -> None:
+        (self.repo / "tools/m001.py").write_bytes(b"x = '\xe9'\n")
+        (self.repo / "tools/m000.py").write_bytes(b"# coding: rot13\nx = 1\n")
+        bad = harness.emissions(self.repo)[1]
+        self.assertEqual(2, len([p for p in bad if "m00" in p]), bad)
+
+
+class TurtleEncodingTest(unittest.TestCase):
+    """A Turtle file is UTF-8, and a leading byte order mark is not a term of it (ikigai-slack#304)."""
+
+    def setUp(self) -> None:
+        self.tmp = tempfile.TemporaryDirectory()
+        self.repo = Path(self.tmp.name) / "repo"
+        shutil.copytree(ROOT, self.repo, ignore=shutil.ignore_patterns(".git", "target"))
+        self.assertEqual([], harness.check(self.repo), "the copy agrees before it is changed")
+
+    def tearDown(self) -> None:
+        self.tmp.cleanup()
+
+    def with_bom(self, name: str) -> None:
+        path = self.repo / ".gonk" / "harness" / name
+        path.write_bytes(b"\xef\xbb\xbf" + path.read_bytes())
+
+    def test_a_bom_on_harness_ttl_is_not_refused(self) -> None:
+        self.with_bom("harness.ttl")
+        self.assertEqual([], harness.check(self.repo))
+
+    def test_a_bom_on_vocabulary_ttl_is_not_refused(self) -> None:
+        self.with_bom("vocabulary.ttl")
+        self.assertEqual([], harness.check(self.repo))
+
+    def test_a_bom_reads_the_same_triples(self) -> None:
+        path = self.repo / ".gonk" / "harness" / "harness.ttl"
+        plain = harness.read_graph(path).triples
+        self.with_bom("harness.ttl")
+        self.assertEqual(plain, harness.read_graph(path).triples)
 
 
 class HarnessCheckTest(unittest.TestCase):
@@ -829,6 +926,16 @@ class GuideTextTest(unittest.TestCase):
                     self.problems("ask-dax-continue-draft"),
                 )
 
+    def test_a_stated_in_path_that_comes_back_by_the_checkout_name_fails(self) -> None:
+        # The copy is named `repo`, so `../repo/AGENTS.md` resolves back inside it. The answer must
+        # not depend on the checkout's directory name (ledger item 233).
+        name = f"../{self.repo.name}/AGENTS.md"
+        self.guide("ask-dax-continue-draft", stated_in=name)
+        self.assertEqual(
+            [f"{GUIDES}ask-dax-continue-draft: statedIn {name!r}, which is outside this repository"],
+            self.problems("ask-dax-continue-draft"),
+        )
+
     def test_a_refused_symlink_skips_only_its_own_case(self) -> None:
         # ikigai-slack#241: Windows without Developer Mode or administrator rights refuses a
         # symlink with WinError 1314, and the case that needs one errored. Nothing here runs on
@@ -1024,8 +1131,11 @@ CONTROLS = "urn:iki:harness:starter:control:"
 
 
 class ControlCodeTest(unittest.TestCase):
-    """A control's enforcedAt names a file inside this repository, compared by what it
-    resolves to, as a guide's statedIn is (ikigai-slack#193)."""
+    """A control's enforcedAt names a file inside this repository, as a guide's statedIn does
+    (ikigai-slack#193). Any `..` segment, by `/` or `\\`, is refused as written, before anything
+    is resolved, with the reason "has a `..` segment" (or "is outside this repository" when it
+    leaves the root); otherwise it is compared by what it resolves to, so a symlink is still
+    judged by its resolved target."""
 
     def setUp(self) -> None:
         self.tmp = tempfile.TemporaryDirectory()
@@ -1059,6 +1169,33 @@ class ControlCodeTest(unittest.TestCase):
             [f"{CONTROLS}ci-checks: enforcedAt {where}, and {where} is outside this repository"],
             self.enforced_at(where),
         )
+
+    def test_an_enforced_at_path_that_comes_back_by_the_checkout_name_fails(self) -> None:
+        # The copy is named `repo`, so `../repo/` resolves back inside it. The answer must not
+        # depend on the checkout's directory name: refused, as it is in a checkout named `other`.
+        where = f"../{self.repo.name}/.github/workflows/ci.yml"
+        self.assertEqual(
+            [f"{CONTROLS}ci-checks: enforcedAt {where}, and {where} is outside this repository"],
+            self.enforced_at(where),
+        )
+
+    def test_an_enforced_at_path_with_an_inner_dot_dot_segment_fails(self) -> None:
+        # Inside the repository once it is resolved, but not a path in its normalised form.
+        where = ".github/../.github/workflows/ci.yml"
+        self.assertEqual(
+            [f"{CONTROLS}ci-checks: enforcedAt {where}, and {where} has a `..` segment"],
+            self.enforced_at(where),
+        )
+
+    def test_a_backslash_dot_dot_segment_is_refused_for_its_own_reason_on_every_platform(self) -> None:
+        # On Windows `\` separates; on Linux `..\repo\x` is one file name. The reason tells a
+        # split on `[\\/]` from a split on `/` alone, which "is not in this repository" would not.
+        for where, reason in (
+            (f"..\\{self.repo.name}\\.github\\workflows\\ci.yml", "is outside this repository"),
+            ("tools\\..\\AGENTS.md", "has a `..` segment"),
+        ):
+            with self.subTest(where=where):
+                self.assertEqual((None, reason), harness.repo_file(self.repo, where))
 
     def test_an_absolute_enforced_at_path_is_not_relative_to_the_repository(self) -> None:
         # Refused whether it names a file outside the repository or inside, as statedIn is, and
@@ -1285,6 +1422,57 @@ class ControlCodeTest(unittest.TestCase):
                 path, _, name = where.partition("#")
                 expected = [] if ok else [f"{CONTROLS}ci-checks: enforcedAt {where}, and {path} has no {name}"]
                 self.assertEqual(expected, self.enforced_at(where))
+
+    def test_a_recipe_looking_line_in_a_triple_quoted_string_is_not_a_recipe(self) -> None:
+        # ikigai-slack#273: the body of an indented string is text, whichever quote kind.
+        (self.repo / ".github/justfile").write_text(
+            "a := '''\nsq: a\n'''\nb := \"\"\"\ndq: in a string\n\"\"\"\n"
+            "c := ```\nbt: x\n```\n\nreal:\n    echo\n"
+        )
+        for where, ok in (
+            (".github/justfile#sq", False),
+            (".github/justfile#dq", False),
+            (".github/justfile#bt", False),
+            (".github/justfile#real", True),
+        ):
+            with self.subTest(where=where):
+                shutil.copy(ROOT / ".gonk/harness/harness.ttl", self.repo / ".gonk/harness/harness.ttl")
+                path, _, name = where.partition("#")
+                expected = [] if ok else [f"{CONTROLS}ci-checks: enforcedAt {where}, and {path} has no {name}"]
+                self.assertEqual(expected, self.enforced_at(where))
+
+    def assert_recipes(self, justfile: str, expected: dict[str, bool]) -> None:
+        (self.repo / ".github/justfile").write_text(justfile)
+        for name, ok in expected.items():
+            where = f".github/justfile#{name}"
+            with self.subTest(where=where):
+                shutil.copy(ROOT / ".gonk/harness/harness.ttl", self.repo / ".gonk/harness/harness.ttl")
+                want = [] if ok else [f"{CONTROLS}ci-checks: enforcedAt {where}, and .github/justfile has no {name}"]
+                self.assertEqual(want, self.enforced_at(where))
+
+    def test_two_triple_quoted_strings_leave_the_recipe_between_them(self) -> None:
+        # ikigai-slack#308: a greedy string pattern hides `real`, which sits between two strings.
+        self.assert_recipes(
+            "a := '''\nsq: x\n'''\n\nreal:\n    echo\n\nb := '''\nsq2: y\n'''\n",
+            {"real": True, "sq": False, "sq2": False},
+        )
+
+    def test_a_quote_triple_outside_a_string_opens_none(self) -> None:
+        # ikigai-slack#307: in a comment, a one-line string, a default or a recipe body.
+        self.assert_recipes(
+            "# a ''' in a comment\nfirst:\n    echo\n\none := \"a'''b\"\n\nreal1:\n    echo\n\n"
+            "dflt x='\"\"\"':\n    echo\n\nbody:\n    echo '''\n\nreal2:\n    echo\n",
+            {"first": True, "real1": True, "dflt": True, "body": True, "real2": True},
+        )
+
+    def test_a_ghost_recipe_in_a_string_after_a_quote_triple_is_not_a_recipe(self) -> None:
+        # ikigai-slack#307: a `'''` in a comment or a one-line string before the real string
+        # shifted the pairing; and `\\"""` is an escape, not a close.
+        self.assert_recipes(
+            "# '''\nx := '''\nghost1: a\n'''\n\ny := \"it'''s\" + \"\"\"\n  ghost2: b\n\"\"\"\n\n"
+            'z := """\n\\"""\nghost3: c\n"""\n\nreal:\n    echo\n',
+            {"ghost1": False, "ghost2": False, "ghost3": False, "real": True},
+        )
 
     def test_a_backtick_default_and_an_escaped_quote_may_hold_a_colon_equals(self) -> None:
         # ikigai-slack#275: a backtick default is a quote kind too, and a double-quoted default

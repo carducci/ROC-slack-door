@@ -60,6 +60,7 @@ import html
 import html.entities
 import itertools
 import os
+import posixpath
 import re
 import secrets
 import stat
@@ -540,7 +541,8 @@ class Graph:
 
 
 def read_graph(path: Path) -> Graph:
-    return Graph(parse_turtle(path.read_text(encoding="utf-8"), str(path))[0])
+    # utf-8-sig: a leading byte order mark is not a term of the file (ikigai-slack#304).
+    return Graph(parse_turtle(path.read_text(encoding="utf-8-sig"), str(path))[0])
 
 
 def insert_data(graph: str, triples: list[tuple]) -> str:
@@ -625,15 +627,14 @@ def emissions(repo: Path) -> tuple[list[tuple[str, str, str]], list[str]]:
         for path in sorted((repo / top).rglob("*.py")):
             rel = path.relative_to(repo).as_posix()
             try:
-                text = path.read_text(encoding="utf-8-sig")
-            except UnicodeDecodeError:
-                bad.append(f"{rel} is not UTF-8 text")
-                continue
+                source = path.read_bytes()
             except OSError as e:
                 bad.append(f"{rel} can't be read ({e.strerror})")
                 continue
             try:
-                tree = ast.parse(text, rel)
+                # Bytes, as Python reads them: the BOM and a PEP 263 cookie decide the encoding
+                # (ikigai-slack#305), and what Python says of a file it refuses is the problem.
+                tree = ast.parse(source, rel)
             except (SyntaxError, ValueError, MemoryError, RecursionError) as e:
                 bad.append(f"{rel} can't be parsed ({e})")
                 continue
@@ -667,6 +668,45 @@ def _emitters_in(tree: ast.AST, rel: str):
 
     walk(tree, "<module>")
     return found, bad
+
+
+def _blank_just_strings(text: str) -> str:
+    """A justfile with the body of each triple-quoted (indented) string emptied, its delimiters
+    and newlines kept, so a recipe-looking line inside one is not a recipe (ikigai-slack#273).
+    Read as just's lexer reads it, left to right: a string opens only where one can start, so
+    not in a comment, nor in a recipe body (an indented line); a one-line string is skipped
+    whole, so a quote triple in one opens nothing; and a backslash escapes the next character
+    in a double-quoted string (`\\"\\"\\"` does not close a `\"\"\"` string)."""
+    out: list[str] = []
+    i, n = 0, len(text)
+    while i < n:
+        c = text[i]
+        if (i == 0 or text[i - 1] == "\n") and c in " \t" or c == "#":
+            end = text.find("\n", i)
+            end = n if end < 0 else end
+            out.append(text[i:end])
+            i = end
+        elif c in "'\"`":
+            q = c * 3 if text.startswith(c * 3, i) else c
+            k = i + len(q)
+            while k < n and not text.startswith(q, k):
+                if c == '"' and text[k] == "\\":
+                    k += 1
+                elif len(q) == 1 and text[k] == "\n":
+                    break
+                k += 1
+            k = min(k, n)
+            closed = text.startswith(q, k)
+            end = k + len(q) if closed else k
+            if len(q) == 3:
+                out.append(q + "\n" * text.count("\n", i, k) + (q if closed else ""))
+            else:
+                out.append(text[i:end])
+            i = end
+        else:
+            out.append(c)
+            i += 1
+    return "".join(out)
 
 
 def undefined_in(path: Path, cited: str, name: str) -> str | None:
@@ -710,6 +750,7 @@ def undefined_in(path: Path, cited: str, name: str) -> str | None:
             rf"^@?{re.escape(name)}(?![\w-])"
             r"(?:[^:'\"`\n]|'[^'\n]*'|`[^`\n]*`|\"(?:[^\"\\\n]|\\.)*\")*:(?!=)"
         )
+        text = _blank_just_strings(text)
         found = re.search(recipe, text, re.M) is not None
     else:
         return (
@@ -893,8 +934,11 @@ def repo_file(root: Path, name: str) -> tuple[Path | None, str]:
     """The file a guide's statedIn or a control's enforcedAt names, resolved against the
     repository's root (as vocabulary.ttl defines both), or None and why. Refused as not relative,
     on every platform, wherever it points: a name that starts with / or \\ (POSIX absolute, UNC),
-    or holds a colon (a drive letter, a URL, a colon in a directory's name). One that leaves the
-    repository through `..` or by a symlink names no file of it, and a NUL is no path at all.
+    or holds a colon (a drive letter, a URL, a colon in a directory's name). Any `..` segment, split
+    on `/` or `\\`, is refused as written, before anything is resolved: "is outside this
+    repository" when it leaves the root, else "has a `..` segment", even where it stays inside.
+    A symlink is still judged by its resolved target: one that leaves the repository names no
+    file of it. A NUL is no path at all.
     One that is in the repository but is no file is refused as what it is: a directory; a FIFO
     or a socket ("is not a file"); a symlink to nothing, or a symlink loop; a path the system
     won't let this process reach ("can't be read (<its reason>)", as read_sections words it);
@@ -908,6 +952,12 @@ def repo_file(root: Path, name: str) -> tuple[Path | None, str]:
         return None, "is not a path relative to this repository's root"
     if "\x00" in name:
         return None, "is not a path"
+    segments = re.split(r"[\\/]", name)
+    if ".." in segments:
+        lexical = posixpath.normpath("/".join(segments))
+        if lexical.split("/")[0] == "..":
+            return None, "is outside this repository"
+        return None, "has a `..` segment"
     link = root / name
     # Not strict: a loop or a dangling link is kept as written, and named by the stat below.
     path = Path(os.path.realpath(link))
