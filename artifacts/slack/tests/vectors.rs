@@ -23,9 +23,33 @@ const CHANNEL: &str = "C1";
 /// The name the host gives the channel under test.
 const NAME: &str = "gonk-chat";
 const BOT: &str = "UBOT";
+/// The second channel the host declares, with its own speaker.
+const OTHER_NAME: &str = "fixme";
+const OTHER_CHANNEL: &str = "C2";
+/// How many vectors are for scenarios that read the door's configuration or its kernel, which
+/// the door's own tests cover.
+const DOOR_ONLY: usize = 9;
 
-fn channels() -> [(String, String); 1] {
-    [(NAME.to_owned(), CHANNEL.to_owned())]
+fn channels() -> [(String, String); 2] {
+    [
+        (NAME.to_owned(), CHANNEL.to_owned()),
+        (OTHER_NAME.to_owned(), OTHER_CHANNEL.to_owned()),
+    ]
+}
+
+fn speakers() -> [(String, String, Vec<String>); 2] {
+    [
+        (NAME.to_owned(), CHANNEL.to_owned(), vec!["U1".to_owned()]),
+        (OTHER_NAME.to_owned(), OTHER_CHANNEL.to_owned(), vec!["U2".to_owned()]),
+    ]
+}
+
+/// The Slack id of the declared channel `name`, or an undeclared name as it is.
+fn id_named(name: &str) -> String {
+    channels()
+        .into_iter()
+        .find(|(declared, _)| declared == name)
+        .map_or_else(|| name.to_owned(), |(_, id)| id)
 }
 
 /// The door under test: its thread map, its inbox, and what the vector has learned so far.
@@ -44,7 +68,7 @@ impl World {
         World {
             dir: dir.to_owned(),
             threads: Threads::open_channels(dir, &channels(), FakeSlack::new()).unwrap(),
-            inbox: Inbox::open(dir, CHANNEL, BOT, ["U1"]).unwrap(),
+            inbox: Inbox::open_channels(dir, BOT, &speakers()).unwrap(),
             root: None,
             fed: 0,
         }
@@ -52,7 +76,7 @@ impl World {
 
     fn restart(&mut self) {
         self.threads = Threads::open_channels(&self.dir, &channels(), FakeSlack::new()).unwrap();
-        self.inbox = Inbox::open(&self.dir, CHANNEL, BOT, ["U1"]).unwrap();
+        self.inbox = Inbox::open_channels(&self.dir, BOT, &speakers()).unwrap();
     }
 
     /// Replaces `"$root"` with the opening message's timestamp.
@@ -68,13 +92,16 @@ impl World {
     }
 }
 
-/// What a step's `as` holds: that one capability, in the channel under test; with no `as`, all.
+/// What a step's `as` holds: that one capability, in the channel under test; with no `as`, every
+/// capability in every declared channel.
 fn grants(step: &Value) -> Capability {
     match step.get("as").and_then(Value::as_str) {
         Some("read") => Capability::scoped([scope(NAME, READ)]),
         Some("post") => Capability::scoped([scope(NAME, POST)]),
         Some("react") => Capability::scoped([scope(NAME, REACT)]),
-        _ => Capability::scoped([READ, POST, REACT].map(|action| scope(NAME, action))),
+        _ => Capability::scoped(channels().iter().flat_map(|(name, _)| {
+            [READ, POST, REACT].map(|action| scope(name, action))
+        })),
     }
 }
 
@@ -132,8 +159,8 @@ fn expect_list(what: &str, actual: &[Value], expected: &Value) -> Result<(), Str
     Ok(())
 }
 
-fn delivery_json(delivery: &Delivery) -> Value {
-    match delivery {
+fn delivery_json(channel: &str, delivery: &Delivery) -> Value {
+    let mut json = match delivery {
         Delivery::Message {
             key,
             user,
@@ -142,7 +169,9 @@ fn delivery_json(delivery: &Delivery) -> Value {
             ..
         } => json!({ "key": key, "user": user, "time": time, "text": text }),
         Delivery::Reaction { key, user, name } => json!({ "key": key, "user": user, "reaction": name }),
-    }
+    };
+    json["channel"] = json!(channel);
+    json
 }
 
 fn run_step(world: &mut World, step: &Value) -> Result<(), String> {
@@ -155,8 +184,15 @@ fn run_step(world: &mut World, step: &Value) -> Result<(), String> {
         "write" => {
             let key = args["key"].as_str().unwrap();
             let text = args["text"].as_str().unwrap();
-            let was_open = world.threads.exists(&Capability::root(), key).unwrap_or(false);
-            let result = world.threads.write(&grants(args), key, text);
+            let channel = args.get("channel").and_then(Value::as_str);
+            let was_open = match channel {
+                Some(name) => world.threads.exists_in(&Capability::root(), name, key).unwrap_or(false),
+                None => world.threads.exists(&Capability::root(), key).unwrap_or(false),
+            };
+            let result = match channel {
+                Some(name) => world.threads.write_in(&grants(args), name, key, text),
+                None => world.threads.write(&grants(args), key, text),
+            };
             let ok = result.is_ok();
             let actual = outcome(result);
             if ok && !was_open {
@@ -168,6 +204,24 @@ fn run_step(world: &mut World, step: &Value) -> Result<(), String> {
                     .map(|post| post.ts.clone());
             }
             expect_outcome("write", &actual, step)
+        }
+        "announce" => {
+            let channel = args["channel"].as_str().unwrap();
+            let text = args["text"].as_str().unwrap();
+            let actual = outcome(world.threads.announce(&grants(args), channel, text));
+            expect_outcome("announce", &actual, step)
+        }
+        "legacy_thread" => {
+            // A thread the door opened before channels: a line of its map under the channel's id.
+            let line = format!(
+                "{}\t{}\t{}\n",
+                args["key"].as_str().unwrap(),
+                id_named(args["channel"].as_str().unwrap()),
+                args["ts"].as_str().unwrap()
+            );
+            fs::write(world.dir.join("threads.tsv"), line).map_err(|e| e.to_string())?;
+            world.restart();
+            Ok(())
         }
         "read" => {
             let key = args["key"].as_str().unwrap();
@@ -206,7 +260,10 @@ fn run_step(world: &mut World, step: &Value) -> Result<(), String> {
                 };
                 Event::Message {
                     id,
-                    channel: CHANNEL.to_owned(),
+                    channel: message
+                        .get("channel")
+                        .and_then(Value::as_str)
+                        .map_or_else(|| CHANNEL.to_owned(), id_named),
                     user: message["user"].as_str().unwrap_or_default().to_owned(),
                     ts: format!("1700000{:03}.000001", 100 + n),
                     thread,
@@ -230,12 +287,12 @@ fn run_step(world: &mut World, step: &Value) -> Result<(), String> {
             let events = world.threads.transport_mut().take_events();
             let mut deliveries = Vec::new();
             for event in events {
-                if let Some(delivery) = world
+                if let Some((channel, delivery)) = world
                     .inbox
-                    .deliver(event, &mut world.threads)
+                    .deliver_to(event, &mut world.threads)
                     .map_err(|e| format!("inbox: {e}"))?
                 {
-                    deliveries.push(delivery_json(&delivery));
+                    deliveries.push(delivery_json(&channel, &delivery));
                 }
             }
             expect_list("inbox", &deliveries, &world.resolve(args))
@@ -246,7 +303,7 @@ fn run_step(world: &mut World, step: &Value) -> Result<(), String> {
                 .transport()
                 .posts()
                 .into_iter()
-                .map(|post| json!({ "text": post.text, "thread": post.thread }))
+                .map(|post| json!({ "text": post.text, "thread": post.thread, "channel": post.channel }))
                 .collect();
             expect_list("posts", &posts, &world.resolve(args))
         }
@@ -323,6 +380,6 @@ fn every_scenario_vector_passes_against_the_fake() {
         }
     }
     assert!(ran > 0, "no vector ran");
-    assert_eq!(skipped.len(), 1, "only the door-only vector is skipped: {skipped:?}");
+    assert_eq!(skipped.len(), DOOR_ONLY, "only the door-only vectors are skipped: {skipped:?}");
     let _ = fs::remove_dir_all(&root);
 }

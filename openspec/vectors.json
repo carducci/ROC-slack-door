@@ -27,6 +27,20 @@
       ]
     },
     {
+      "id": "urn:openspec:spec:configuration:requirement:secrets-never-leave-the-door:scenario:describing-a-channel-a-reaction-and-an-inbox",
+      "steps": [
+        {
+          "describe": "urn:slack:channel:{name}"
+        },
+        {
+          "describe": "urn:slack:channel:{name}:thread:{key}:reaction:{reaction}"
+        },
+        {
+          "describe": "urn:slack:channel:{name}:inbox"
+        }
+      ]
+    },
+    {
       "id": "urn:openspec:spec:configuration:requirement:capabilities-gate-the-verbs:scenario:posting-without-the-capability",
       "steps": [
         {
@@ -156,7 +170,8 @@
         {
           "feed": {
             "message": {
-              "user": "U1",
+              "user": "U2",
+              "channel": "fixme",
               "text": "What's blocked today?",
               "in": null
             }
@@ -166,13 +181,15 @@
           "inbox": [
             {
               "key": "m-1700000101-000001",
-              "user": "U1",
+              "channel": "fixme",
+              "user": "U2",
               "text": "What's blocked today?"
             }
           ]
         },
         {
           "write": {
+            "channel": "fixme",
             "key": "m-1700000101-000001",
             "text": "Blocked on a token"
           },
@@ -182,7 +199,8 @@
           "posts": [
             {
               "text": "Blocked on a token",
-              "thread": "1700000101.000001"
+              "thread": "1700000101.000001",
+              "channel": "C2"
             }
           ]
         }
@@ -493,6 +511,214 @@
             "key": "never-opened"
           },
           "expect": "no-thread"
+        }
+      ]
+    },
+    {
+      "id": "urn:openspec:spec:configuration:requirement:capabilities-gate-the-verbs:scenario:a-capability-for-another-channel",
+      "steps": [
+        {
+          "write": {
+            "channel": "fixme",
+            "key": "fixme-1",
+            "text": "Hi",
+            "as": "post"
+          },
+          "expect": "not-granted"
+        },
+        {
+          "posts": []
+        }
+      ]
+    },
+    {
+      "id": "urn:openspec:spec:configuration:requirement:the-host-declares-the-channels:scenario:two-channels",
+      "door": true,
+      "steps": [
+        {
+          "door": "a_good_two_channel_configuration_resolves"
+        }
+      ]
+    },
+    {
+      "id": "urn:openspec:spec:configuration:requirement:the-host-declares-the-channels:scenario:a-channel-with-no-speakers-stops-the-start",
+      "door": true,
+      "steps": [
+        {
+          "door": "a_channel_with_no_speakers_stops_the_start_and_is_named"
+        }
+      ]
+    },
+    {
+      "id": "urn:openspec:spec:configuration:requirement:the-host-declares-the-channels:scenario:a-channel-id-that-is-not-a-slack-channel-id-stops-the-start",
+      "door": true,
+      "steps": [
+        {
+          "door": "a_channel_id_that_is_not_a_slack_channel_id_stops_the_start_and_is_named"
+        }
+      ]
+    },
+    {
+      "id": "urn:openspec:spec:configuration:requirement:the-host-declares-the-channels:scenario:a-slack-channel-id-starts",
+      "door": true,
+      "steps": [
+        {
+          "door": "white_space_around_a_channel_id_is_trimmed_and_the_trimmed_id_starts"
+        }
+      ]
+    },
+    {
+      "id": "urn:openspec:spec:configuration:requirement:the-host-declares-the-channels:scenario:an-undeclared-channel",
+      "steps": [
+        {
+          "write": {
+            "channel": "random",
+            "key": "x",
+            "text": "Hi"
+          },
+          "expect": "no-channel"
+        },
+        {
+          "posts": []
+        }
+      ]
+    },
+    {
+      "id": "urn:openspec:spec:configuration:requirement:the-host-declares-the-channels:scenario:a-channel-name-starting-with-a-dash-stops-the-start",
+      "door": true,
+      "steps": [
+        {
+          "door": "a_channel_name_starting_with_a_dash_stops_the_start_naming_the_setting"
+        }
+      ]
+    },
+    {
+      "id": "urn:openspec:spec:inbox:requirement:only-allowed-people-in-the-configured-channel-are-delivered:scenario:a-speaker-of-one-channel-in-another",
+      "steps": [
+        {
+          "feed": {
+            "message": {
+              "user": "U2",
+              "text": "Hi",
+              "channel": "gonk-chat",
+              "in": null
+            }
+          }
+        },
+        {
+          "inbox": []
+        }
+      ]
+    },
+    {
+      "id": "urn:openspec:spec:inbox:requirement:reading-an-inbox-needs-the-channel-s-capability:scenario:reading-another-channel-s-inbox",
+      "door": true,
+      "steps": [
+        {
+          "door": "the_inbox_needs_the_channels_read_capability_for_source_and_delete"
+        }
+      ]
+    },
+    {
+      "id": "urn:openspec:spec:inbox:requirement:reading-an-inbox-needs-the-channel-s-capability:scenario:the-read-capability-alone-reads-and-takes",
+      "door": true,
+      "steps": [
+        {
+          "door": "the_channels_read_alone_sources_and_deletes_its_inbox_and_no_other"
+        }
+      ]
+    },
+    {
+      "id": "urn:openspec:spec:inbox:requirement:reading-an-inbox-needs-the-channel-s-capability:scenario:a-caller-does-not-write-an-inbox",
+      "door": true,
+      "steps": [
+        {
+          "door": "a_sink_to_a_channels_inbox_writes_nothing_under_any_capability"
+        }
+      ]
+    },
+    {
+      "id": "urn:openspec:spec:threads:requirement:a-thread-is-named-by-a-key-the-caller-chooses:scenario:the-same-key-in-two-channels",
+      "steps": [
+        {
+          "write": {
+            "channel": "gonk-chat",
+            "key": "x",
+            "text": "One"
+          },
+          "expect": "ok"
+        },
+        {
+          "write": {
+            "channel": "fixme",
+            "key": "x",
+            "text": "Two"
+          },
+          "expect": "ok"
+        },
+        {
+          "posts": [
+            {
+              "text": "One",
+              "thread": null,
+              "channel": "C1"
+            },
+            {
+              "text": "Two",
+              "thread": null,
+              "channel": "C2"
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "id": "urn:openspec:spec:threads:requirement:writing-to-a-channel-posts-a-new-message:scenario:an-announcement",
+      "steps": [
+        {
+          "announce": {
+            "channel": "gonk-chat",
+            "text": "Door restarted"
+          },
+          "expect": "ok"
+        },
+        {
+          "posts": [
+            {
+              "text": "Door restarted",
+              "thread": null,
+              "channel": "C1"
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "id": "urn:openspec:spec:threads:requirement:threads-opened-before-channels-keep-their-keys:scenario:an-old-thread-after-the-upgrade",
+      "steps": [
+        {
+          "legacy_thread": {
+            "channel": "gonk-chat",
+            "key": "carducci-54",
+            "ts": "1700000000.000001"
+          }
+        },
+        {
+          "write": {
+            "channel": "gonk-chat",
+            "key": "carducci-54",
+            "text": "Still here"
+          },
+          "expect": "ok"
+        },
+        {
+          "posts": [
+            {
+              "text": "Still here",
+              "thread": "1700000000.000001",
+              "channel": "C1"
+            }
+          ]
         }
       ]
     }

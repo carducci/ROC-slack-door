@@ -24,6 +24,6 @@
 
 ## 5. Vectors, docs and deploy
 
-- [ ] 5.1 Update `openspec/vectors.json` for every changed and new scenario (the `describe` vector of "Describing a thread" is already 4.1's), the README runbook (two channels, the new `door.env` keys, and mounting `urn:slack:channel:{name}:inbox` for the inbox; the thread and reaction mounts are already 4.1's), and descriptions (`Meta`) for every new resource 4.1 did not add: `urn:slack:channel:{name}`, `urn:slack:channel:{name}:thread:{key}:reaction:{reaction}` and `urn:slack:channel:{name}:inbox`
+- [x] 5.1 Update `openspec/vectors.json` for every changed and new scenario (the `describe` vector of "Describing a thread" is already 4.1's), the README runbook (two channels, the new `door.env` keys, and mounting `urn:slack:channel:{name}:inbox` for the inbox; the thread and reaction mounts are already 4.1's), and descriptions (`Meta`) for every new resource 4.1 did not add: `urn:slack:channel:{name}`, `urn:slack:channel:{name}:thread:{key}:reaction:{reaction}` and `urn:slack:channel:{name}:inbox`
 - [ ] 5.2 Human only, Michael on Tamariz, after this change's PRs merge: in one sitting, rewrite `~/.config/ikigai-slack/door.env` for `gonk-chat`, restart `roc-slack-door`, and switch Dax's kickoff (`~/gonk-da/.gonk/dax-kickoff.md`) to `urn:sd:slack:channel:gonk-chat:thread:<key>` and `urn:sd:slack:channel:gonk-chat:inbox`; check that one thread reply round-trips
 - [ ] 5.3 Archive the change into `openspec/specs/`

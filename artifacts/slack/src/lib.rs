@@ -245,17 +245,45 @@ pub struct Meta {
 
 /// The resources the door serves, described.
 pub fn descriptions() -> Vec<Meta> {
-    vec![Meta {
-        resource: "urn:slack:channel:{name}:thread:{key}",
-        description: "A conversation in the declared Slack channel `name`, named by a key you \
-            choose. Writing to a key with no thread opens one; writing to an open thread \
-            replies in it; reading returns its messages in order, in UTC.",
-        verbs: vec![
-            ("source", "urn:cap:slack:channel:{name}:read"),
-            ("exists", "urn:cap:slack:channel:{name}:read"),
-            ("sink", "urn:cap:slack:channel:{name}:post"),
-        ],
-    }]
+    vec![
+        Meta {
+            resource: "urn:slack:channel:{name}",
+            description: "A Slack channel the host declared, by its name `name`. Writing to it \
+                posts a new top-level message; no key names that message.",
+            verbs: vec![("sink", "urn:cap:slack:channel:{name}:post")],
+        },
+        Meta {
+            resource: "urn:slack:channel:{name}:thread:{key}",
+            description: "A conversation in the declared Slack channel `name`, named by a key you \
+                choose. Writing to a key with no thread opens one; writing to an open thread \
+                replies in it; reading returns its messages in order, in UTC.",
+            verbs: vec![
+                ("source", "urn:cap:slack:channel:{name}:read"),
+                ("exists", "urn:cap:slack:channel:{name}:read"),
+                ("sink", "urn:cap:slack:channel:{name}:post"),
+            ],
+        },
+        Meta {
+            resource: "urn:slack:channel:{name}:thread:{key}:reaction:{reaction}",
+            description: "A reaction on the opening message of the thread `key` in the declared \
+                channel `name`. Writing adds it, deleting removes it, and removing one that is \
+                absent succeeds; nothing is posted.",
+            verbs: vec![
+                ("sink", "urn:cap:slack:channel:{name}:react"),
+                ("delete", "urn:cap:slack:channel:{name}:react"),
+            ],
+        },
+        Meta {
+            resource: "urn:slack:channel:{name}:inbox",
+            description: "What the channel's speakers said since you last took it: their \
+                top-level messages, replies and reactions, as tuples. Reading lists them; \
+                deleting takes them.",
+            verbs: vec![
+                ("source", "urn:cap:slack:channel:{name}:read"),
+                ("delete", "urn:cap:slack:channel:{name}:read"),
+            ],
+        },
+    ]
 }
 
 /// A message the door's bot posted, as the fake records it.
@@ -523,7 +551,15 @@ mod tests {
     #[test]
     fn every_resource_is_described_with_its_capabilities() {
         let described: Vec<&str> = descriptions().iter().map(|meta| meta.resource).collect();
-        assert_eq!(described, ["urn:slack:channel:{name}:thread:{key}"]);
+        assert_eq!(
+            described,
+            [
+                "urn:slack:channel:{name}",
+                "urn:slack:channel:{name}:thread:{key}",
+                "urn:slack:channel:{name}:thread:{key}:reaction:{reaction}",
+                "urn:slack:channel:{name}:inbox",
+            ]
+        );
         for meta in descriptions() {
             assert!(!meta.description.is_empty());
         }

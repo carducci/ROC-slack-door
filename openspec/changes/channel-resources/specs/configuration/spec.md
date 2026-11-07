@@ -22,6 +22,11 @@ door produces.
 - **WHEN** a caller asks for the description of `urn:slack:channel:gonk-chat:thread:carducci-54`
 - **THEN** the answer contains neither token
 
+#### Scenario: Describing a channel, a reaction and an inbox
+
+- **WHEN** a caller asks for the description of `urn:slack:channel:gonk-chat`, of `urn:slack:channel:gonk-chat:thread:carducci-54:reaction:tada` and of `urn:slack:channel:gonk-chat:inbox`
+- **THEN** each answer describes that resource and contains neither token
+
 ### Requirement: Capabilities gate the verbs
 
 Each verb SHALL require a capability scoped to the channel it acts in:
