@@ -27,6 +27,9 @@ pub enum Delivery {
         /// The time in UTC, as `2023-11-14T22:13:20Z`.
         time: String,
         text: String,
+        /// One entry per file the message carried: its resource name, or the reason it was
+        /// refused (`files-not-accepted` while no channel takes files).
+        files: Vec<String>,
     },
     /// A reaction by an allowed person on the opening message of the thread `key` names.
     Reaction {
@@ -146,6 +149,7 @@ impl Inbox {
                 ts,
                 thread,
                 text,
+                files,
                 ..
             } => {
                 let Some(name) = self.speaker_channel(&channel, &user) else {
@@ -176,6 +180,8 @@ impl Inbox {
                         user,
                         time: utc(&ts),
                         text,
+                        // No channel declares file types yet, so every file is refused.
+                        files: files.iter().map(|_| "files-not-accepted".to_owned()).collect(),
                     },
                 ))
             }
@@ -272,6 +278,7 @@ mod tests {
                 user: "U1".to_owned(),
                 time: "2023-11-14T22:15:00Z".to_owned(),
                 text: "Use the fine-grained token".to_owned(),
+                files: Vec::new(),
             })
         );
     }

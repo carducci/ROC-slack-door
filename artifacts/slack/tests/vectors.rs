@@ -139,6 +139,7 @@ fn delivery_json(delivery: &Delivery) -> Value {
             user,
             time,
             text,
+            ..
         } => json!({ "key": key, "user": user, "time": time, "text": text }),
         Delivery::Reaction { key, user, name } => json!({ "key": key, "user": user, "reaction": name }),
     }
