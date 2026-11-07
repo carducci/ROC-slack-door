@@ -91,6 +91,14 @@ impl Objects {
         Ok(id)
     }
 
+    /// Remove the object under `id`. An object that is not there succeeds and changes nothing.
+    pub fn remove(&self, id: &ContentId) -> io::Result<()> {
+        match fs::remove_file(self.path(id)) {
+            Err(e) if e.kind() != io::ErrorKind::NotFound => Err(e),
+            _ => Ok(()),
+        }
+    }
+
     /// The bytes stored under `id`, if any.
     pub fn get(&self, id: &ContentId) -> io::Result<Option<Vec<u8>>> {
         match fs::read(self.path(id)) {

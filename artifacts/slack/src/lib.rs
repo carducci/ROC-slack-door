@@ -17,11 +17,13 @@ use std::collections::{BTreeSet, VecDeque};
 use ikigai_core::Capability;
 
 mod conversation;
+mod files;
 mod inbox;
 mod objects;
 mod threads;
 
 pub use conversation::{to_json, Entry};
+pub use files::{FileEntry, Files};
 pub use inbox::{Delivery, Inbox};
 pub use objects::Objects;
 pub use threads::{is_slack_channel_id, Thread, ThreadError, Threads};
