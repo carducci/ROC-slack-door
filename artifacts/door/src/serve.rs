@@ -406,7 +406,7 @@ mod tests {
         if let Delivery::Message { files, .. } = &mut post {
             *files = vec!["files-not-accepted".to_owned(), "files-not-accepted".to_owned()];
         }
-        drop_delivery(&kernel, "gonk-chat", &post).unwrap();
+        drop_delivery(&intray_of("two-refused-files"), "gonk-chat", &post).unwrap();
         let two_files = "ASK { { SELECT (COUNT(*) AS ?n) WHERE { ?m <urn:slack:file> ?f } } \
                          FILTER(?n = 2) }";
         let request = Request::new(Verb::Delete, Iri::parse("urn:slack:channel:gonk-chat:inbox").unwrap())
