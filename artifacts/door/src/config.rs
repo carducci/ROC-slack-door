@@ -51,9 +51,11 @@ impl fmt::Debug for Config {
     }
 }
 
-/// A channel name is 1 to 40 lowercase letters, digits and `-`.
+/// A channel name is 1 to 40 lowercase letters, digits and `-`, and starts with a letter or digit:
+/// ikigai-core reads a capability scope that starts with `-` as an exclusion, which nobody holds.
 fn valid_name(name: &str) -> bool {
     (1..=40).contains(&name.len())
+        && !name.starts_with('-')
         && name.chars().all(|c| c.is_ascii_lowercase() || c.is_ascii_digit() || c == '-')
 }
 
@@ -118,7 +120,8 @@ impl Config {
         for name in names {
             if !valid_name(&name) {
                 problems.push(format!(
-                    "channel name {name:?} is invalid: use 1 to 40 lowercase letters, digits and -"
+                    "channel name {name:?} in {CHANNELS} is invalid: use 1 to 40 lowercase letters, digits and -, \
+                     starting with a letter or digit"
                 ));
                 continue;
             }
@@ -235,6 +238,15 @@ mod tests {
             let problem = only(refused(&file));
             assert!(problem.contains("invalid") && problem.contains(bad), "{problem}");
         }
+    }
+
+    #[test]
+    fn a_channel_name_starting_with_a_dash_stops_the_start_naming_the_setting() {
+        let mut file = file_with("");
+        file.insert(CHANNELS.to_owned(), "gonk-chat,-ops".to_owned());
+        let problem = only(refused(&file));
+        assert!(problem.contains("-ops") && problem.contains(CHANNELS) && problem.contains("invalid"), "{problem}");
+        assert!(["0day", "a-", "a-b"].into_iter().all(valid_name));
     }
 
     #[test]
