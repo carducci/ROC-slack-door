@@ -38,8 +38,9 @@ impl Objects {
     }
 
     /// Keep `bytes` and return their content address. Content already stored is not written
-    /// again; new content goes to a temporary name and is renamed into place, so a reader
-    /// never sees half an object.
+    /// again; new content goes to a temporary name and is hard-linked into place, which
+    /// refuses a name already taken, so a reader never sees half an object and a stored
+    /// object is never replaced.
     pub fn put(&self, bytes: &[u8]) -> io::Result<ContentId> {
         let id = ContentId::of(bytes);
         let path = self.path(&id);
@@ -47,7 +48,22 @@ impl Objects {
             return Ok(id);
         }
         let dir = path.parent().expect("an object path has a parent");
-        fs::create_dir_all(dir)?;
+        // Each fan-out directory is made one level at a time and must be a real directory:
+        // a symbolic link there would carry the write out of the store.
+        let mut at = self.root.clone();
+        for part in dir.strip_prefix(&self.root).expect("an object lives under the root") {
+            at.push(part);
+            match fs::symlink_metadata(&at) {
+                Ok(m) if m.is_dir() => {}
+                Ok(_) => return Err(io::Error::other("a fan-out path is not a plain directory")),
+                Err(e) if e.kind() == io::ErrorKind::NotFound => match fs::create_dir(&at) {
+                    Ok(()) => {}
+                    Err(e) if e.kind() == io::ErrorKind::AlreadyExists => {}
+                    Err(e) => return Err(e),
+                },
+                Err(e) => return Err(e),
+            }
+        }
         // A name of this write's own: the process id, a counter shared by every writer in the
         // process, and a retry on a name already taken (a leftover of an earlier run, whose
         // process id and counter may repeat). `create_new` never follows or overwrites it.
@@ -63,12 +79,15 @@ impl Objects {
         let written = (|| {
             file.write_all(bytes)?;
             file.sync_all()?;
-            fs::rename(&tmp, &path)
+            // A hard link refuses a name already taken, where a rename would replace it: an
+            // object stored is never rewritten.
+            match fs::hard_link(&tmp, &path) {
+                Err(e) if e.kind() == io::ErrorKind::AlreadyExists && path.is_file() => Ok(()),
+                other => other,
+            }
         })();
-        if let Err(e) = written {
-            let _ = fs::remove_file(&tmp);
-            return Err(e);
-        }
+        let _ = fs::remove_file(&tmp);
+        written?;
         Ok(id)
     }
 
