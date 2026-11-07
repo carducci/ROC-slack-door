@@ -99,8 +99,10 @@ fn event_from(payload: &Value) -> Option<Event> {
     match event["type"].as_str()? {
         "message" => {
             // A message with files is `file_share`; every other subtype (edits, deletions) is dropped.
-            match event["subtype"].as_str() {
-                None | Some("file_share") => {}
+            // A subtype that is present but null or not a string is still a subtype.
+            match event.get("subtype") {
+                None => {}
+                Some(subtype) if subtype.as_str() == Some("file_share") => {}
                 Some(_) => return None,
             }
             Some(Event::Message {
@@ -124,20 +126,19 @@ fn event_from(payload: &Value) -> Option<Event> {
     }
 }
 
-/// The files a message event carries. A file with no id or no private URL is left out; an
-/// unreported size is zero.
+/// The files a message event carries, one entry per file. A file Slack cannot serve has no
+/// private URL and keeps an empty one, to be refused as `file-unavailable`; an unreported size
+/// is zero.
 fn files_of(event: &Value) -> Vec<SlackFile> {
     let Some(files) = event["files"].as_array() else {
         return Vec::new();
     };
     files
         .iter()
-        .filter_map(|file| {
-            Some(SlackFile {
-                id: file["id"].as_str()?.to_owned(),
-                size: file["size"].as_u64().unwrap_or(0),
-                url_private: file["url_private"].as_str()?.to_owned(),
-            })
+        .map(|file| SlackFile {
+            id: file["id"].as_str().unwrap_or_default().to_owned(),
+            size: file["size"].as_u64().unwrap_or(0),
+            url_private: file["url_private"].as_str().unwrap_or_default().to_owned(),
         })
         .collect()
 }
