@@ -4,8 +4,8 @@
 //! named by `ContentId::of` of the bytes. Every path is built from the 64 hex digits of a
 //! digest and nothing else, so no caller-supplied text reaches the file system.
 //!
-//! This is built on `std::fs` with that digest-only jail; moving it onto `ikigai-fs` is the
-//! open question of the draft pull request.
+//! This is built on `std::fs` with that digest-only jail; the move onto `ikigai-fs` is ledger
+//! item 406 on ikigai-slack.
 
 use std::fs;
 use std::io::{self, Write};
