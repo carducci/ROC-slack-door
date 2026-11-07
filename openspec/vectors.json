@@ -170,7 +170,8 @@
         {
           "feed": {
             "message": {
-              "user": "U1",
+              "user": "U2",
+              "channel": "fixme",
               "text": "What's blocked today?",
               "in": null
             }
@@ -180,13 +181,15 @@
           "inbox": [
             {
               "key": "m-1700000101-000001",
-              "user": "U1",
+              "channel": "fixme",
+              "user": "U2",
               "text": "What's blocked today?"
             }
           ]
         },
         {
           "write": {
+            "channel": "fixme",
             "key": "m-1700000101-000001",
             "text": "Blocked on a token"
           },
@@ -196,7 +199,8 @@
           "posts": [
             {
               "text": "Blocked on a token",
-              "thread": "1700000101.000001"
+              "thread": "1700000101.000001",
+              "channel": "C2"
             }
           ]
         }

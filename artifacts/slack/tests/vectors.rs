@@ -159,8 +159,8 @@ fn expect_list(what: &str, actual: &[Value], expected: &Value) -> Result<(), Str
     Ok(())
 }
 
-fn delivery_json(delivery: &Delivery) -> Value {
-    match delivery {
+fn delivery_json(channel: &str, delivery: &Delivery) -> Value {
+    let mut json = match delivery {
         Delivery::Message {
             key,
             user,
@@ -168,7 +168,9 @@ fn delivery_json(delivery: &Delivery) -> Value {
             text,
         } => json!({ "key": key, "user": user, "time": time, "text": text }),
         Delivery::Reaction { key, user, name } => json!({ "key": key, "user": user, "reaction": name }),
-    }
+    };
+    json["channel"] = json!(channel);
+    json
 }
 
 fn run_step(world: &mut World, step: &Value) -> Result<(), String> {
@@ -283,12 +285,12 @@ fn run_step(world: &mut World, step: &Value) -> Result<(), String> {
             let events = world.threads.transport_mut().take_events();
             let mut deliveries = Vec::new();
             for event in events {
-                if let Some(delivery) = world
+                if let Some((channel, delivery)) = world
                     .inbox
-                    .deliver(event, &mut world.threads)
+                    .deliver_to(event, &mut world.threads)
                     .map_err(|e| format!("inbox: {e}"))?
                 {
-                    deliveries.push(delivery_json(&delivery));
+                    deliveries.push(delivery_json(&channel, &delivery));
                 }
             }
             expect_list("inbox", &deliveries, &world.resolve(args))
