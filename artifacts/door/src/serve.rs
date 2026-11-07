@@ -307,7 +307,24 @@ pub fn kernel<T: SlackTransport + Send + 'static>(
     root: std::path::PathBuf,
     declared: Vec<String>,
 ) -> Kernel {
-    Kernel::new(Arc::new(slack_space(threads, declared, root)))
+    Kernel::with_meta_renderer(Arc::new(slack_space(threads, declared, root)), Arc::new(JsonMeta))
+}
+
+/// Renders a `Description` as the JSON a mount forwards to a caller who asks for `Meta` with
+/// `as: application/json`: its id, title, summary and verbs.
+struct JsonMeta;
+
+impl ikigai_core::MetaRenderer for JsonMeta {
+    fn render(&self, description: &Description, target: &ReprType) -> Result<Representation> {
+        let verbs: Vec<String> = description.verbs.iter().map(|verb| format!("{verb:?}")).collect();
+        let json = serde_json::json!({
+            "id": description.id,
+            "title": description.title,
+            "summary": description.summary,
+            "verbs": verbs,
+        });
+        Ok(Representation::new(target.clone(), json.to_string().into_bytes()))
+    }
 }
 
 /// Drops one delivery into the inbox space `space`, through the `intray` kernel under a capability
@@ -421,6 +438,49 @@ mod tests {
         }
         for id in ["slack-channel", "slack-channel-thread", "slack-channel-reaction", "slack-channel-inbox"] {
             assert!(catalog.contains(&format!("id {id}\n")), "no `{id}` in {catalog}");
+        }
+    }
+
+    /// "Describing a channel, a reaction and an inbox", asked the way a caller asks: over the
+    /// door's socket, from the kernel `main` serves, with the JSON `Meta` a mount forwards.
+    #[test]
+    fn a_caller_on_the_doors_socket_is_answered_each_resources_description() {
+        let (kernel, _threads) = door("describe-socket");
+        let path = std::env::temp_dir().join(format!("roc-door-describe-{}.sock", std::process::id()));
+        let _ = std::fs::remove_file(&path);
+        let serving = Arc::new(kernel);
+        let serve_path = path.clone();
+        std::thread::spawn(move || ikigai_ipc::serve_shared(serving, &serve_path));
+        for _ in 0..200 {
+            if path.exists() {
+                break;
+            }
+            std::thread::sleep(std::time::Duration::from_millis(10));
+        }
+        let peer = ikigai_ipc::connect(&path).unwrap();
+        for (iri, resource) in [
+            ("urn:slack:channel:gonk-chat", "urn:slack:channel:{name}"),
+            (
+                "urn:slack:channel:gonk-chat:thread:carducci-54:reaction:tada",
+                "urn:slack:channel:{name}:thread:{key}:reaction:{reaction}",
+            ),
+            ("urn:slack:channel:gonk-chat:inbox", "urn:slack:channel:{name}:inbox"),
+        ] {
+            let meta = descriptions().into_iter().find(|meta| meta.resource == resource).unwrap();
+            let request = Request::new(Verb::Meta, Iri::parse(iri).unwrap())
+                .with_arg("as", ArgRef::Inline(b"application/json".to_vec()));
+            let answer = peer
+                .issue_as_within(request, &Capability::root(), std::time::Duration::from_secs(10))
+                .map(|(answer, _)| String::from_utf8_lossy(&answer.bytes).into_owned());
+            let answer = match answer {
+                Ok(answer) => answer,
+                Err(e) => panic!("asking for the description of {iri} failed: {e}"),
+            };
+            let summary = serde_json::from_str::<serde_json::Value>(&answer).ok()
+                .and_then(|json| json["summary"].as_str().map(str::to_owned))
+                .unwrap_or_default();
+            assert!(summary.contains(meta.description), "{iri} is described as {answer}");
+            assert!(!answer.contains("xoxb-") && !answer.contains("xapp-"), "{iri}: {answer}");
         }
     }
 
