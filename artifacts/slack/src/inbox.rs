@@ -27,6 +27,9 @@ pub enum Delivery {
         /// The time in UTC, as `2023-11-14T22:13:20Z`.
         time: String,
         text: String,
+        /// One entry per file the message carried: its resource name, or the reason it was
+        /// refused (`files-not-accepted` while no channel takes files).
+        files: Vec<String>,
     },
     /// A reaction by an allowed person on the opening message of the thread `key` names.
     Reaction {
@@ -146,6 +149,7 @@ impl Inbox {
                 ts,
                 thread,
                 text,
+                files,
                 ..
             } => {
                 let Some(name) = self.speaker_channel(&channel, &user) else {
@@ -176,6 +180,8 @@ impl Inbox {
                         user,
                         time: utc(&ts),
                         text,
+                        // No channel declares file types yet, so every file is refused.
+                        files: files.iter().map(|_| "files-not-accepted".to_owned()).collect(),
                     },
                 ))
             }
@@ -272,6 +278,7 @@ mod tests {
                 user: "U1".to_owned(),
                 time: "2023-11-14T22:15:00Z".to_owned(),
                 text: "Use the fine-grained token".to_owned(),
+                files: Vec::new(),
             })
         );
     }
@@ -318,6 +325,34 @@ mod tests {
             delivery,
             Some(Delivery::Message { key: Some(k), .. }) if k == "m-1700000100-000001"
         ));
+    }
+
+    #[test]
+    fn a_file_in_a_channel_that_takes_none_lands_refused_as_files_not_accepted() {
+        // Spec `files`, "A file in a channel that takes none": the tuple carries the text and
+        // its one file refused as `files-not-accepted`, not the text alone as if no file came.
+        let dir = scratch("file-none");
+        let (mut threads, _) = with_thread(&dir);
+        let Event::Message { id, channel, user, ts, thread, text, .. } =
+            reply(CHANNEL, "U1", None, "cosmetic: the save button overlaps the footer")
+        else {
+            unreachable!()
+        };
+        let event = Event::Message {
+            id, channel, user, ts, thread, text,
+            files: vec![crate::SlackFile {
+                id: "F1".to_owned(),
+                size: 48213,
+                url_private: "https://files.slack.com/files-pri/T1-F1/screenshot.png".to_owned(),
+            }],
+        };
+        let delivery = inbox(&dir).deliver(event, &mut threads).unwrap();
+        let shown = format!("{delivery:?}");
+        assert!(delivery.is_some(), "the post with a file did not land");
+        assert!(
+            shown.contains("files-not-accepted"),
+            "the file was dropped without a refusal: {shown}"
+        );
     }
 
     #[test]

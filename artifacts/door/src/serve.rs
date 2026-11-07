@@ -271,6 +271,7 @@ pub fn turtle(delivery: &Delivery) -> String {
             user,
             time,
             text,
+            files,
         } => {
             predicates.push("a slack:Message".to_owned());
             if let Some(key) = key {
@@ -279,6 +280,9 @@ pub fn turtle(delivery: &Delivery) -> String {
             predicates.push(format!("slack:user {}", literal(user)));
             predicates.push(format!("slack:time {}", literal(time)));
             predicates.push(format!("slack:text {}", literal(text)));
+            for file in files {
+                predicates.push(format!("slack:file {}", literal(file)));
+            }
         }
         Delivery::Reaction { key, user, name } => {
             predicates.push("a slack:Reaction".to_owned());
@@ -354,6 +358,7 @@ mod tests {
             user: user.to_owned(),
             time: "1.5".to_owned(),
             text: text.to_owned(),
+            files: Vec::new(),
         }
     }
 
@@ -723,6 +728,7 @@ mod tests {
             user: "U1".to_owned(),
             time: "2023-11-14T22:15:00Z".to_owned(),
             text: "Use \"the\" token".to_owned(),
+            files: Vec::new(),
         });
         assert!(tuple.contains("a slack:Message"));
         assert!(tuple.contains("slack:key \"carducci-54\""));
@@ -736,6 +742,7 @@ mod tests {
             user: "U1".to_owned(),
             time: "2023-11-14T22:15:00Z".to_owned(),
             text: "What's blocked today?".to_owned(),
+            files: Vec::new(),
         });
         assert!(!tuple.contains("slack:key"));
     }
