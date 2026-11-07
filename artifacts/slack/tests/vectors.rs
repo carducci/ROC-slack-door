@@ -13,13 +13,20 @@ use std::fs;
 use std::path::{Path, PathBuf};
 
 use roc_slack_door::{
-    descriptions, to_json, Delivery, Event, FakeSlack, Grants, Inbox, SlackTransport, ThreadError,
+    descriptions, scope, to_json, Delivery, Event, FakeSlack, Inbox, SlackTransport, ThreadError,
     Threads, TransportError, POST, READ, REACT,
 };
+use ikigai_core::Capability;
 use serde_json::{json, Value};
 
 const CHANNEL: &str = "C1";
+/// The name the host gives the channel under test.
+const NAME: &str = "gonk-chat";
 const BOT: &str = "UBOT";
+
+fn channels() -> [(String, String); 1] {
+    [(NAME.to_owned(), CHANNEL.to_owned())]
+}
 
 /// The door under test: its thread map, its inbox, and what the vector has learned so far.
 struct World {
@@ -36,7 +43,7 @@ impl World {
     fn open(dir: &Path) -> World {
         World {
             dir: dir.to_owned(),
-            threads: Threads::open(dir, CHANNEL, FakeSlack::new()).unwrap(),
+            threads: Threads::open_channels(dir, &channels(), FakeSlack::new()).unwrap(),
             inbox: Inbox::open(dir, CHANNEL, BOT, ["U1"]).unwrap(),
             root: None,
             fed: 0,
@@ -44,7 +51,7 @@ impl World {
     }
 
     fn restart(&mut self) {
-        self.threads = Threads::open(&self.dir, CHANNEL, FakeSlack::new()).unwrap();
+        self.threads = Threads::open_channels(&self.dir, &channels(), FakeSlack::new()).unwrap();
         self.inbox = Inbox::open(&self.dir, CHANNEL, BOT, ["U1"]).unwrap();
     }
 
@@ -61,12 +68,13 @@ impl World {
     }
 }
 
-fn grants(step: &Value) -> Grants {
+/// What a step's `as` holds: that one capability, in the channel under test; with no `as`, all.
+fn grants(step: &Value) -> Capability {
     match step.get("as").and_then(Value::as_str) {
-        Some("read") => Grants::new([READ]),
-        Some("post") => Grants::new([POST]),
-        Some("react") => Grants::new([REACT]),
-        _ => Grants::all(),
+        Some("read") => Capability::scoped([scope(NAME, READ)]),
+        Some("post") => Capability::scoped([scope(NAME, POST)]),
+        Some("react") => Capability::scoped([scope(NAME, REACT)]),
+        _ => Capability::scoped([READ, POST, REACT].map(|action| scope(NAME, action))),
     }
 }
 
@@ -146,7 +154,7 @@ fn run_step(world: &mut World, step: &Value) -> Result<(), String> {
         "write" => {
             let key = args["key"].as_str().unwrap();
             let text = args["text"].as_str().unwrap();
-            let was_open = world.threads.exists(&Grants::all(), key).unwrap_or(false);
+            let was_open = world.threads.exists(&Capability::root(), key).unwrap_or(false);
             let result = world.threads.write(&grants(args), key, text);
             let ok = result.is_ok();
             let actual = outcome(result);

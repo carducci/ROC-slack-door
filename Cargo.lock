@@ -1350,6 +1350,7 @@ dependencies = [
 name = "roc-slack-door"
 version = "0.0.0"
 dependencies = [
+ "ikigai-core",
  "serde_json",
 ]
 

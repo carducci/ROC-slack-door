@@ -1,8 +1,9 @@
-//! The served space: `urn:slack:channel:{name}:thread:{key}` and its reactions,
-//! with the older `urn:slack:thread:{key}` names still bound, as endpoints in a kernel, plus
-//! the inbox space the door drops deliveries into, all behind one `Kernel` that another kernel
-//! mounts over a Unix socket. The door writes the inbox through the kernel, as any caller would,
-//! under the host's own root capability.
+//! The served space: `urn:slack:channel:{name}:thread:{key}` and its reactions as endpoints in a
+//! kernel, plus the inbox space the door drops deliveries into, all behind one `Kernel` that
+//! another kernel mounts over a Unix socket. Every verb needs the caller's `Capability` to hold
+//! `urn:cap:slack:channel:{name}:{read,post,react}` for the channel it acts in. The door writes
+//! the inbox through the kernel, as any caller would, under a capability that holds only the
+//! intray's `out`.
 
 use std::sync::{Arc, Mutex};
 
@@ -11,20 +12,12 @@ use ikigai_core::{
     ArgRef, Capability, Endpoint, EndpointSpace, Error, Fallback, Invocation, Iri,
     Kernel, Representation, Request, Result, ReprType, Space, UriTemplate, Verb,
 };
-use roc_slack_door::{check_channel, to_json, Grants, Refusal, SlackTransport, ThreadError, Threads, READ, POST, REACT};
+use roc_slack_door::{check_channel, require, to_json, Refusal, SlackTransport, ThreadError, Threads, READ};
 
 use roc_slack_door::Delivery;
 
 /// The threads, shared by every endpoint and the inbox loop.
 pub type Shared<T> = Arc<Mutex<Threads<T>>>;
-
-/// The capabilities a caller holds, as the library's grants.
-fn grants_of(capability: &Capability) -> Grants {
-    let held = [READ, POST, REACT]
-        .into_iter()
-        .filter(|scope| capability.allows(scope));
-    Grants::new(held)
-}
 
 /// A library refusal or failure, as the kernel's error taxonomy names it.
 fn to_error(error: ThreadError) -> Error {
@@ -57,7 +50,7 @@ fn to_error(error: ThreadError) -> Error {
             ))
         }
         ThreadError::Refused(Refusal::NotGranted(scope)) => {
-            Error::Denied(format!("this call needs `{scope}`"))
+            Error::Denied(format!("not-granted: this call needs `{scope}`"))
         }
         ThreadError::Unavailable { retry_after_secs } => Error::Unavailable(match retry_after_secs {
             Some(secs) => format!("Slack is busy; retry after {secs}s"),
@@ -83,59 +76,6 @@ fn ok_text(message: &str) -> Representation {
     )
 }
 
-/// The older `urn:slack:thread:{key}`, bound with no channel: it reads only `key`. Sourcing reads
-/// the conversation, sinking posts to it. The channel form is `ChannelThreadEndpoint`.
-pub struct ThreadEndpoint<T: SlackTransport> {
-    threads: Shared<T>,
-}
-
-#[async_trait]
-impl<T: SlackTransport + Send + 'static> Endpoint for ThreadEndpoint<T> {
-    async fn invoke(&self, inv: &Invocation<'_>) -> Result<Representation> {
-        let key = inv.bindings.get("key").unwrap_or_default();
-        let grants = grants_of(inv.capability);
-        match inv.request.verb {
-            Verb::Source => {
-                let entries = self
-                    .threads
-                    .lock()
-                    .map_err(|_| Error::Endpoint("the thread map is poisoned".to_owned()))?
-                    .read(&grants, key)
-                    .map_err(to_error)?;
-                Ok(Representation::new(
-                    ReprType::new("application/json"),
-                    to_json(&entries).into_bytes(),
-                ))
-            }
-            Verb::Sink => {
-                let text = text_of(inv)?;
-                self.threads
-                    .lock()
-                    .map_err(|_| Error::Endpoint("the thread map is poisoned".to_owned()))?
-                    .write(&grants, key, &text)
-                    .map_err(to_error)?;
-                Ok(ok_text("posted"))
-            }
-            Verb::Exists => {
-                let open = self
-                    .threads
-                    .lock()
-                    .map_err(|_| Error::Endpoint("the thread map is poisoned".to_owned()))?
-                    .exists(&grants, key)
-                    .map_err(to_error)?;
-                Ok(ok_text(if open { "true" } else { "false" }))
-            }
-            other => Err(Error::Endpoint(format!(
-                "urn:slack:thread takes source, sink and exists, not {other:?}"
-            ))),
-        }
-    }
-
-    fn name(&self) -> &str {
-        "urn:slack:thread"
-    }
-}
-
 /// `urn:slack:channel:{name}:thread:{key}`: sourcing reads the conversation, sinking posts to it.
 pub struct ChannelThreadEndpoint<T: SlackTransport> {
     threads: Shared<T>,
@@ -147,14 +87,13 @@ impl<T: SlackTransport + Send + 'static> Endpoint for ChannelThreadEndpoint<T> {
     async fn invoke(&self, inv: &Invocation<'_>) -> Result<Representation> {
         let channel = inv.bindings.get("name").unwrap_or_default();
         let key = inv.bindings.get("key").unwrap_or_default();
-        let grants = grants_of(inv.capability);
         let mut threads = self
             .threads
             .lock()
             .map_err(|_| Error::Endpoint("the thread map is poisoned".to_owned()))?;
         match inv.request.verb {
             Verb::Source => {
-                let entries = threads.read_in(&grants, channel, key).map_err(to_error)?;
+                let entries = threads.read_in(inv.capability,channel, key).map_err(to_error)?;
                 Ok(Representation::new(
                     ReprType::new("application/json"),
                     to_json(&entries).into_bytes(),
@@ -164,11 +103,11 @@ impl<T: SlackTransport + Send + 'static> Endpoint for ChannelThreadEndpoint<T> {
                 check_channel(&self.declared, channel)
                     .map_err(|refusal| to_error(ThreadError::Refused(refusal)))?;
                 let text = text_of(inv)?;
-                threads.write_in(&grants, channel, key, &text).map_err(to_error)?;
+                threads.write_in(inv.capability,channel, key, &text).map_err(to_error)?;
                 Ok(ok_text("posted"))
             }
             Verb::Exists => {
-                let open = threads.exists_in(&grants, channel, key).map_err(to_error)?;
+                let open = threads.exists_in(inv.capability,channel, key).map_err(to_error)?;
                 Ok(ok_text(if open { "true" } else { "false" }))
             }
             other => {
@@ -183,41 +122,6 @@ impl<T: SlackTransport + Send + 'static> Endpoint for ChannelThreadEndpoint<T> {
 
     fn name(&self) -> &str {
         "urn:slack:channel:thread"
-    }
-}
-
-/// The older `urn:slack:thread:{key}:reaction:{name}`, bound with no channel: `name` here is the
-/// reaction. Sinking adds it, deleting removes it. The channel form,
-/// `urn:slack:channel:{name}:thread:{key}:reaction:{reaction}`, is served by `ChannelEndpoint`.
-pub struct ReactionEndpoint<T: SlackTransport> {
-    threads: Shared<T>,
-}
-
-#[async_trait]
-impl<T: SlackTransport + Send + 'static> Endpoint for ReactionEndpoint<T> {
-    async fn invoke(&self, inv: &Invocation<'_>) -> Result<Representation> {
-        let key = inv.bindings.get("key").unwrap_or_default();
-        let name = inv.bindings.get("name").unwrap_or_default();
-        let add = match inv.request.verb {
-            Verb::Sink => true,
-            Verb::Delete => false,
-            other => {
-                return Err(Error::Endpoint(format!(
-                    "a thread reaction takes sink and delete, not {other:?}"
-                )))
-            }
-        };
-        let grants = grants_of(inv.capability);
-        self.threads
-            .lock()
-            .map_err(|_| Error::Endpoint("the thread map is poisoned".to_owned()))?
-            .react(&grants, key, name, add)
-            .map_err(to_error)?;
-        Ok(ok_text(if add { "reacted" } else { "unreacted" }))
-    }
-
-    fn name(&self) -> &str {
-        "urn:slack:thread:reaction"
     }
 }
 
@@ -240,16 +144,15 @@ impl<T: SlackTransport + Send + 'static> Endpoint for ChannelEndpoint<T> {
         if let (Some(reaction), Verb::Sink | Verb::Delete) = (inv.bindings.get("reaction"), inv.request.verb) {
             let (key, add) = (inv.bindings.get("key").unwrap_or_default(), inv.request.verb == Verb::Sink);
             let mut threads = self.threads.lock().map_err(|_| Error::Endpoint("the thread map is poisoned".to_owned()))?;
-            threads.react_in(&grants_of(inv.capability), name, key, reaction, add).map_err(to_error)?;
+            threads.react_in(inv.capability, name, key, reaction, add).map_err(to_error)?;
             return Ok(ok_text(if add { "reacted" } else { "unreacted" }));
         }
         if inv.request.verb == Verb::Sink && bound_rest.is_some_and(|rest| !rest.contains(':')) {
             let text = text_of(inv)?;
-            let grants = grants_of(inv.capability);
             self.threads
                 .lock()
                 .map_err(|_| Error::Endpoint("the thread map is poisoned".to_owned()))?
-                .announce(&grants, name, &text)
+                .announce(inv.capability, name, &text)
                 .map_err(to_error)?;
             return Ok(ok_text("posted"));
         }
@@ -276,6 +179,8 @@ impl Endpoint for InboxEndpoint {
     async fn invoke(&self, inv: &Invocation<'_>) -> Result<Representation> {
         let name = inv.bindings.get("name").unwrap_or_default();
         check_channel(&self.declared, name)
+            .map_err(|refusal| to_error(ThreadError::Refused(refusal)))?;
+        require(inv.capability, name, READ)
             .map_err(|refusal| to_error(ThreadError::Refused(refusal)))?;
         let target = Iri::parse(&format!("urn:space:{name}"))
             .map_err(|e| Error::Endpoint(format!("{e:?}")))?;
@@ -327,20 +232,7 @@ pub fn slack_space<T: SlackTransport + Send + 'static>(
         )
         .bind(
             UriTemplate::parse("urn:slack:channel:{rest}").expect("a fixed template"),
-            ChannelEndpoint {
-                threads: Arc::clone(&threads),
-                declared,
-            },
-        )
-        .bind(
-            UriTemplate::parse("urn:slack:thread:{key}:reaction:{name}").expect("a fixed template"),
-            ReactionEndpoint {
-                threads: Arc::clone(&threads),
-            },
-        )
-        .bind(
-            UriTemplate::parse("urn:slack:thread:{key}").expect("a fixed template"),
-            ThreadEndpoint { threads },
+            ChannelEndpoint { threads, declared },
         )
 }
 
@@ -357,13 +249,15 @@ pub fn kernel<T: SlackTransport + Send + 'static>(
     Kernel::new(Arc::new(Fallback::new(spaces)))
 }
 
-/// Drops one delivery into the inbox space `space`, through the kernel under the host's root
-/// capability. The tuple is Turtle, so a host can match it with a SPARQL template.
+/// Drops one delivery into the inbox space `space`, through the kernel under a capability that
+/// holds only the intray's `out`, which the intray does not scope to one space. The tuple is
+/// Turtle, so a host can match it with a SPARQL template.
 pub fn drop_delivery(kernel: &Kernel, space: &str, delivery: &Delivery) -> std::result::Result<(), String> {
     let target = Iri::parse(&format!("urn:space:{space}")).map_err(|e| format!("{e:?}"))?;
     let request = Request::new(Verb::Sink, target)
         .with_arg("content", ArgRef::Inline(turtle(delivery).into_bytes()));
-    futures_executor::block_on(kernel.issue(request, &Capability::root()))
+    let capability = Capability::root().attenuate([ikigai_intray::CAP_OUT]);
+    futures_executor::block_on(kernel.issue(request, &capability))
         .map(|_| ())
         .map_err(|e| e.to_string())
 }
@@ -742,16 +636,84 @@ mod tests {
         assert!(threads.lock().unwrap().transport().posts().is_empty());
     }
 
+    fn issue_as(kernel: &Kernel, verb: Verb, iri: &str, capability: &Capability) -> Result<Representation> {
+        let mut request = Request::new(verb, Iri::parse(iri).unwrap());
+        if verb == Verb::Sink {
+            request = request.with_arg("content", ArgRef::Inline(b"hello".to_vec()));
+        }
+        futures_executor::block_on(kernel.issue(request, capability))
+    }
+
+    fn holding(scopes: &[(&str, &str)]) -> Capability {
+        Capability::scoped(scopes.iter().map(|(name, action)| roc_slack_door::scope(name, action)))
+    }
+
     #[test]
-    fn exists_through_the_door_answers_for_a_closed_and_an_open_thread() {
-        let (kernel, _threads) = door("exists");
-        let answer = |iri| {
-            let reply = issue(&kernel, Verb::Exists, iri).unwrap();
-            String::from_utf8(reply.bytes.to_vec()).unwrap()
+    fn the_names_without_a_channel_are_bound_to_nothing() {
+        let (kernel, threads) = two_channel_door("old-names");
+        // Spelled in two pieces so tests/test_old_names.py, which refuses the whole name anywhere
+        // under artifacts/, does not refuse this test.
+        let thread = format!("urn:slack:{}:k", "thread");
+        for iri in [thread.clone(), format!("{thread}:reaction:x")] {
+            for verb in [Verb::Exists, Verb::Sink] {
+                let error = issue(&kernel, verb, &iri).unwrap_err().to_string();
+                let lower = error.to_lowercase();
+                assert!(
+                    !lower.contains("no thread") && !lower.contains("no-channel") && !lower.contains("not-granted"),
+                    "{verb:?} {iri}: an endpoint answered: {error}"
+                );
+            }
+        }
+        assert!(threads.lock().unwrap().transport().posts().is_empty());
+    }
+
+    #[test]
+    fn a_verb_without_the_channels_capability_is_refused_before_slack_is_called() {
+        let (kernel, threads) = two_channel_door("gate");
+        issue(&kernel, Verb::Sink, "urn:slack:channel:gonk-chat:thread:k").unwrap();
+        let before = threads.lock().unwrap().transport().posts().len();
+        let thread = "urn:slack:channel:gonk-chat:thread:k";
+        let denied = |verb, iri: &str, held: &Capability, needs: &str| {
+            let error = issue_as(&kernel, verb, iri, held).unwrap_err().to_string();
+            assert!(error.contains("not-granted") && error.contains(needs), "{verb:?} {iri}: {error}");
         };
-        assert_eq!(answer("urn:slack:thread:never-opened"), "false\n");
-        issue(&kernel, Verb::Sink, "urn:slack:thread:k").unwrap();
-        assert_eq!(answer("urn:slack:thread:k"), "true\n");
+        let read_only = holding(&[("gonk-chat", "read")]);
+        denied(Verb::Sink, thread, &read_only, "urn:cap:slack:channel:gonk-chat:post");
+        denied(Verb::Sink, "urn:slack:channel:gonk-chat", &read_only, "urn:cap:slack:channel:gonk-chat:post");
+        let reaction = format!("{thread}:reaction:tada");
+        denied(Verb::Sink, &reaction, &read_only, "urn:cap:slack:channel:gonk-chat:react");
+        denied(Verb::Delete, &reaction, &read_only, "urn:cap:slack:channel:gonk-chat:react");
+        let all_here = holding(&[("gonk-chat", "read"), ("gonk-chat", "post"), ("gonk-chat", "react")]);
+        let elsewhere = "urn:slack:channel:fixme:thread:fixme-1";
+        denied(Verb::Sink, elsewhere, &all_here, "urn:cap:slack:channel:fixme:post");
+        denied(Verb::Source, elsewhere, &all_here, "urn:cap:slack:channel:fixme:read");
+        denied(Verb::Exists, elsewhere, &all_here, "urn:cap:slack:channel:fixme:read");
+        denied(Verb::Source, thread, &holding(&[("gonk-chat", "post")]), "urn:cap:slack:channel:gonk-chat:read");
+        let posts = threads.lock().unwrap().transport().posts().len();
+        assert_eq!(posts, before);
+        assert!(threads.lock().unwrap().transport().reactions().is_empty());
+        issue_as(&kernel, Verb::Source, thread, &read_only).unwrap();
+    }
+
+    #[test]
+    fn the_inbox_needs_the_channels_read_capability_for_source_and_delete() {
+        let (kernel, _) = two_channel_door("inbox-gate");
+        drop_delivery(&kernel, "gonk-chat", &a_message("carducci-54", "U1", "hi")).unwrap();
+        let inbox = "urn:slack:channel:gonk-chat:inbox";
+        let fixme_only = holding(&[("fixme", "read")]);
+        for verb in [Verb::Source, Verb::Delete] {
+            let error = issue_as(&kernel, verb, inbox, &fixme_only).unwrap_err().to_string();
+            assert!(error.contains("not-granted") && error.contains("urn:cap:slack:channel:gonk-chat:read"), "{error}");
+        }
+        issue(&kernel, Verb::Source, inbox).unwrap();
+    }
+
+    #[test]
+    fn a_delivery_is_dropped_under_a_capability_that_can_only_write_the_intray() {
+        let (kernel, _) = two_channel_door("drop-narrow");
+        drop_delivery(&kernel, "fixme", &a_message("k-1", "U1", "hi")).unwrap();
+        let taken = issue(&kernel, Verb::Delete, "urn:slack:channel:fixme:inbox").unwrap();
+        assert!(String::from_utf8(taken.bytes.to_vec()).unwrap().contains("k-1"));
     }
 
     #[test]

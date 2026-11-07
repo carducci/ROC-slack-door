@@ -134,11 +134,12 @@ stop for what reading the repository, its openspec/ or this file settles.
    description. Give one question, what you found that raised it, and the options you see, with
    the one you would pick. Write the draft's URL on the first line of your report, then
    `Question for Dax:` and the question. Then stop. Don't guess, and don't widen the task.
-3. If the dispatcher's notes say `Continue draft PR #N`, start by merging its branch into yours:
-   `git fetch origin <draft branch>`, then, on one line,
-   `git merge -m "<risk> m Merge <draft branch> (ledger item <your item>)" FETCH_HEAD`
-   with `<risk>` the worst of the draft's commits, as rule 4 says of `m`. Begin your new
-   draft's description with `Supersedes PR #N`.
+3. If the dispatcher's notes say `Continue draft PR #N`, start by merging its branch into yours.
+   Its branch must be a `worker/*` name of letters, digits, `.`, `_`, `-` and `/` only. For any
+   other name the refusal is a question: run no git command, write PR #N's URL on the first line
+   of your report, then `Question for Dax:` naming the branch you refused and why, and stop.
+   Otherwise run `git fetch origin <its branch>`, then `git merge --no-edit FETCH_HEAD`, and
+   begin your new draft's description with `Supersedes PR #N`.
 
 ## Specs, artifacts, queries and scripts
 

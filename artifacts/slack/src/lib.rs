@@ -14,13 +14,15 @@
 
 use std::collections::{BTreeSet, VecDeque};
 
+use ikigai_core::Capability;
+
 mod conversation;
 mod inbox;
 mod threads;
 
 pub use conversation::{to_json, Entry};
 pub use inbox::{Delivery, Inbox};
-pub use threads::{Thread, ThreadError, Threads};
+pub use threads::{is_slack_channel_id, Thread, ThreadError, Threads};
 
 /// What the door asks of Slack. The real implementation speaks the Web API and Socket Mode;
 /// the fake in this crate records what it is asked and answers from memory.
@@ -124,7 +126,7 @@ pub enum Refusal {
     /// The reaction's name is not a Slack emoji name.
     BadReaction,
     /// The caller does not hold the capability the verb needs.
-    NotGranted(&'static str),
+    NotGranted(String),
     /// The channel name is not one the host declares.
     NoChannel(String),
 }
@@ -144,38 +146,27 @@ impl Refusal {
     }
 }
 
-/// The capability that reads a thread.
-pub const READ: &str = "urn:cap:slack:read";
-/// The capability that posts to a thread.
-pub const POST: &str = "urn:cap:slack:post";
-/// The capability that adds or removes a reaction on a thread.
-pub const REACT: &str = "urn:cap:slack:react";
+/// The action that reads a thread or the inbox.
+pub const READ: &str = "read";
+/// The action that posts to a channel or a thread.
+pub const POST: &str = "post";
+/// The action that adds or removes a reaction on a thread.
+pub const REACT: &str = "react";
 
-/// The capabilities one caller holds.
-#[derive(Debug, Clone, Default, PartialEq, Eq)]
-pub struct Grants(BTreeSet<String>);
+/// The capability that lets a caller `action` (`READ`, `POST` or `REACT`) in the channel `name`:
+/// `urn:cap:slack:channel:{name}:{action}`.
+pub fn scope(name: &str, action: &str) -> String {
+    format!("urn:cap:slack:channel:{name}:{action}")
+}
 
-impl Grants {
-    pub fn new<I, S>(capabilities: I) -> Self
-    where
-        I: IntoIterator<Item = S>,
-        S: Into<String>,
-    {
-        Grants(capabilities.into_iter().map(Into::into).collect())
-    }
-
-    /// A caller holding every capability the door has.
-    pub fn all() -> Self {
-        Self::new([READ, POST, REACT])
-    }
-
-    /// Accepts the caller only when it holds `capability`; otherwise refuses naming it.
-    pub fn require(&self, capability: &'static str) -> Result<(), Refusal> {
-        if self.0.contains(capability) {
-            Ok(())
-        } else {
-            Err(Refusal::NotGranted(capability))
-        }
+/// Accepts the caller only when its capability allows `action` in the channel `name`; otherwise
+/// refuses naming the scope it lacks.
+pub fn require(capability: &Capability, name: &str, action: &str) -> Result<(), Refusal> {
+    let needed = scope(name, action);
+    if capability.allows(&needed) {
+        Ok(())
+    } else {
+        Err(Refusal::NotGranted(needed))
     }
 }
 
@@ -241,22 +232,17 @@ pub struct Meta {
 
 /// The resources the door serves, described.
 pub fn descriptions() -> Vec<Meta> {
-    vec![
-        Meta {
-            resource: "urn:slack:thread:{key}",
-            description: "A conversation in the configured Slack channel, named by a key you \
-                choose. Writing to a key with no thread opens one; writing to an open thread \
-                replies in it; reading returns its messages in order, in UTC.",
-            verbs: vec![("source", READ), ("sink", POST)],
-        },
-        Meta {
-            resource: "urn:slack:thread:{key}:reaction:{name}",
-            description: "A reaction on a thread's opening message, such as white_check_mark \
-                to mark it done. Adding one twice, or removing one that is not there, changes \
-                nothing.",
-            verbs: vec![("sink", REACT), ("delete", REACT)],
-        },
-    ]
+    vec![Meta {
+        resource: "urn:slack:channel:{name}:thread:{key}",
+        description: "A conversation in the declared Slack channel `name`, named by a key you \
+            choose. Writing to a key with no thread opens one; writing to an open thread \
+            replies in it; reading returns its messages in order, in UTC.",
+        verbs: vec![
+            ("source", "urn:cap:slack:channel:{name}:read"),
+            ("exists", "urn:cap:slack:channel:{name}:read"),
+            ("sink", "urn:cap:slack:channel:{name}:post"),
+        ],
+    }]
 }
 
 /// A message the door's bot posted, as the fake records it.
@@ -423,6 +409,26 @@ mod tests {
     use super::*;
 
     #[test]
+    fn every_capability_described_is_scoped_to_a_channel() {
+        let verbs: Vec<_> = descriptions().into_iter().flat_map(|meta| meta.verbs).collect();
+        assert!(!verbs.is_empty());
+        for (verb, capability) in verbs {
+            assert!(capability.starts_with("urn:cap:slack:channel:"), "{verb}: {capability}");
+        }
+    }
+
+    #[test]
+    fn a_scope_for_one_channel_and_action_admits_only_that() {
+        let held = Capability::scoped([scope("gonk-chat", READ)]);
+        assert_eq!(require(&held, "gonk-chat", READ), Ok(()));
+        assert_eq!(
+            require(&held, "gonk-chat", POST),
+            Err(Refusal::NotGranted("urn:cap:slack:channel:gonk-chat:post".to_owned()))
+        );
+        assert!(require(&held, "fixme", READ).is_err());
+    }
+
+    #[test]
     fn a_post_is_recorded_and_returns_its_timestamp() {
         let mut slack = FakeSlack::new();
         let ts = slack.post("C1", None, "Blocked on a token").unwrap();
@@ -503,13 +509,9 @@ mod tests {
     #[test]
     fn every_resource_is_described_with_its_capabilities() {
         let described: Vec<&str> = descriptions().iter().map(|meta| meta.resource).collect();
-        assert_eq!(
-            described,
-            ["urn:slack:thread:{key}", "urn:slack:thread:{key}:reaction:{name}"]
-        );
+        assert_eq!(described, ["urn:slack:channel:{name}:thread:{key}"]);
         for meta in descriptions() {
             assert!(!meta.description.is_empty());
-            assert!(meta.verbs.iter().all(|(_, capability)| capability.starts_with("urn:cap:slack:")));
         }
     }
 
