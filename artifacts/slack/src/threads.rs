@@ -976,4 +976,25 @@ mod tests {
             .unwrap_err();
         assert!(matches!(err, ThreadError::Refused(Refusal::NotGranted(ref s)) if s == "urn:cap:slack:channel:gonk-chat:read"));
     }
+
+    #[test]
+    fn exists_on_the_default_channel_needs_its_read_and_calls_no_transport() {
+        let channels = [
+            ("gonk-chat".to_owned(), "C1".to_owned()),
+            ("fixme".to_owned(), "C2".to_owned()),
+        ];
+        let dir = scratch("exists-default");
+        let mut slack = Threads::open_channels(&dir, &channels, FakeSlack::new()).unwrap();
+        slack.write_in(&all(), "gonk-chat", "carducci-54", "Opening").unwrap();
+        // Reopened over a transport that panics on any call, so a check that reaches Slack fails.
+        let threads = Threads::open_channels(&dir, &channels, NeverCalled).unwrap();
+        for held in [only("gonk-chat", POST), only("fixme", READ)] {
+            let err = threads.exists(&held, "carducci-54").unwrap_err();
+            assert!(
+                matches!(err, ThreadError::Refused(Refusal::NotGranted(ref s)) if s == "urn:cap:slack:channel:gonk-chat:read"),
+                "{err:?}"
+            );
+        }
+        assert!(threads.exists(&only("gonk-chat", READ), "carducci-54").unwrap());
+    }
 }
