@@ -90,14 +90,15 @@ Never make a change only because the item expected one.
     risky (some known risk unchecked), `@` broken (a savepoint; may not build).
   - Intention, exactly one per commit. Uppercase changes one behavior, lowercase none: `F`
     feature, `B` bugfix, `r` refactoring, `d` documentation, and the extensions `e`
-    environment and tooling, `t` tests only, `s` spec, `m` merge, whose risk is the worst of
-    the commits it merges (upstream's Extension Intentions page). Never `@ @`.
+    environment and tooling, `t` tests only, `s` spec. Never `@ @`.
   - One intention per commit, as small as builds and passes; commit after every green step.
     Choose the risk from what was verified, not hoped: no test run, no `^`.
   - The one exception is a merge commit GitHub writes, merging a pull request or updating its
     branch from main: it keeps GitHub's subject, and the pull request's own commits carry the
     notation. A merge commit you write, such as a worker's draft merge in step 3 of "Ask Dax,
-    don't guess", uses `m`.
+    don't guess", is made with `git merge --no-edit FETCH_HEAD` and keeps git's "Merge branch
+    ..." subject; it is the one exception, like GitHub's own merge commits. Prefer rebases to
+    merges where you can; never squash.
 
 ## 5. Report with evidence; the dispatcher closes
 
