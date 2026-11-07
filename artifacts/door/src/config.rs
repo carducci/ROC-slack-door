@@ -165,7 +165,7 @@ impl Config {
                 .collect();
             for t in file_types.iter().filter(|t| !SNIFFABLE.contains(&t.as_str())) {
                 problems.push(format!(
-                    "channel {name} lists file type {t}, which ikigai-sniff can't detect: fix {prefix}_FILE_TYPES"
+                    "channel {name} lists file type {t:?}, which ikigai-sniff can't detect: fix {prefix}_FILE_TYPES"
                 ));
             }
             let limit_key = format!("{prefix}_FILE_MAX_BYTES");
