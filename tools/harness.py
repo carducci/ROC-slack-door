@@ -736,7 +736,7 @@ def undefined_in(path: Path, cited: str, name: str) -> str | None:
         if not JUST_NAME.fullmatch(name):
             return f"{cited}: {name!r} is not a recipe name of a justfile ([A-Za-z_][A-Za-z0-9_-]*)"
         try:
-            text = path.read_text(encoding="utf-8")
+            text = path.read_text(encoding="utf-8-sig")
         except UnicodeDecodeError:
             return f"{cited} is not UTF-8 text"
         except OSError as e:
