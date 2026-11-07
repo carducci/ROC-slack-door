@@ -69,9 +69,22 @@ started by someone who is not a speaker, SHALL be written with no key.
 ### Requirement: Reading an inbox needs the channel's capability
 
 Sourcing `urn:slack:channel:{name}:inbox` SHALL list that channel's undelivered tuples, and
-deleting one SHALL take it, both requiring `urn:cap:slack:channel:{name}:read`.
+deleting one SHALL take it, both requiring `urn:cap:slack:channel:{name}:read` and nothing else:
+a caller holding only that capability can do both. No other name reaches a channel's inbox, and
+every other verb on it, a Sink included, SHALL be refused under any capability, so a caller
+never writes a tuple into an inbox.
 
 #### Scenario: Reading another channel's inbox
 
 - **WHEN** a caller holding only `urn:cap:slack:channel:fixme:read` reads `urn:slack:channel:gonk-chat:inbox`
 - **THEN** it is refused for lack of `urn:cap:slack:channel:gonk-chat:read`
+
+#### Scenario: The read capability alone reads and takes
+
+- **WHEN** a caller holding only `urn:cap:slack:channel:gonk-chat:read` sources, then deletes, `urn:slack:channel:gonk-chat:inbox`
+- **THEN** both succeed, and `urn:slack:channel:fixme:inbox` stays refused for lack of `urn:cap:slack:channel:fixme:read`
+
+#### Scenario: A caller does not write an inbox
+
+- **WHEN** a caller holding `urn:cap:slack:channel:gonk-chat:read`, or `…:post`, or every capability, sinks to `urn:slack:channel:gonk-chat:inbox`
+- **THEN** it is refused and no tuple is written
