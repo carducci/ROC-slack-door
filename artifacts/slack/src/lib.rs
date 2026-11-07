@@ -74,7 +74,9 @@ pub struct Message {
 }
 
 /// A file attached to a message, as Slack's event describes it. `size` is what Slack reports,
-/// which is not to be trusted; `url_private` needs the bot token.
+/// which is not to be trusted; `url_private` needs the bot token. A file Slack cannot serve (a
+/// tombstone, or hidden by a plan's limit) has an empty `url_private`: it is still listed, and
+/// is refused later as `file-unavailable`.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct SlackFile {
     pub id: String,
