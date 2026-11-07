@@ -321,6 +321,34 @@ mod tests {
     }
 
     #[test]
+    fn a_file_in_a_channel_that_takes_none_lands_refused_as_files_not_accepted() {
+        // Spec `files`, "A file in a channel that takes none": the tuple carries the text and
+        // its one file refused as `files-not-accepted`, not the text alone as if no file came.
+        let dir = scratch("file-none");
+        let (mut threads, _) = with_thread(&dir);
+        let Event::Message { id, channel, user, ts, thread, text, .. } =
+            reply(CHANNEL, "U1", None, "cosmetic: the save button overlaps the footer")
+        else {
+            unreachable!()
+        };
+        let event = Event::Message {
+            id, channel, user, ts, thread, text,
+            files: vec![crate::SlackFile {
+                id: "F1".to_owned(),
+                size: 48213,
+                url_private: "https://files.slack.com/files-pri/T1-F1/screenshot.png".to_owned(),
+            }],
+        };
+        let delivery = inbox(&dir).deliver(event, &mut threads).unwrap();
+        let shown = format!("{delivery:?}");
+        assert!(delivery.is_some(), "the post with a file did not land");
+        assert!(
+            shown.contains("files-not-accepted"),
+            "the file was dropped without a refusal: {shown}"
+        );
+    }
+
+    #[test]
     fn writing_to_a_minted_key_replies_under_the_speakers_message() {
         let (mut inbox, mut threads, _) = two_channels("two-minted");
         let event = reply("C2", "U2", None, "bug: the save button overlaps the footer");
