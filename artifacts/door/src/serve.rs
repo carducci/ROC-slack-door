@@ -9,10 +9,10 @@ use std::sync::{Arc, Mutex};
 
 use async_trait::async_trait;
 use ikigai_core::{
-    ArgRef, Capability, Endpoint, EndpointSpace, Error, Fallback, Invocation, Iri,
+    ArgRef, Capability, Description, Endpoint, EndpointSpace, Error, Fallback, Invocation, Iri,
     Kernel, Representation, Request, Result, ReprType, Space, UriTemplate, Verb,
 };
-use roc_slack_door::{check_channel, require, to_json, Refusal, SlackTransport, ThreadError, Threads, READ};
+use roc_slack_door::{check_channel, descriptions, require, to_json, Refusal, SlackTransport, ThreadError, Threads, READ};
 
 use roc_slack_door::Delivery;
 
@@ -76,6 +76,30 @@ fn ok_text(message: &str) -> Representation {
     )
 }
 
+/// What the catalog and the MCP projection show of an endpoint: the `Meta` the library wrote for
+/// `resource`, under the published id `id`. The capabilities stay in the summary: a `requires` on
+/// a `Description` is enforced by the kernel as a literal scope, and these are per channel.
+fn described(id: &str, resource: &str) -> Description {
+    let meta = descriptions()
+        .into_iter()
+        .find(|meta| meta.resource == resource)
+        .expect("every served resource has a description");
+    let capabilities: Vec<&str> = meta.verbs.iter().map(|(_, capability)| *capability).collect();
+    let mut description = Description::new(id)
+        .title(resource)
+        .summary(format!("{} Needs {}.", meta.description, capabilities.join(", ")));
+    for (verb, _) in &meta.verbs {
+        description = description.verb(match *verb {
+            "source" => Verb::Source,
+            "sink" => Verb::Sink,
+            "delete" => Verb::Delete,
+            "exists" => Verb::Exists,
+            other => unreachable!("`{other}` is not a verb the door describes"),
+        });
+    }
+    description
+}
+
 /// `urn:slack:channel:{name}:thread:{key}`: sourcing reads the conversation, sinking posts to it.
 pub struct ChannelThreadEndpoint<T: SlackTransport> {
     threads: Shared<T>,
@@ -123,6 +147,10 @@ impl<T: SlackTransport + Send + 'static> Endpoint for ChannelThreadEndpoint<T> {
     fn name(&self) -> &str {
         "urn:slack:channel:thread"
     }
+
+    fn describe(&self) -> Description {
+        described("slack-channel-thread", "urn:slack:channel:{name}:thread:{key}")
+    }
 }
 
 /// `urn:slack:channel:{rest}`: every name under a channel. A channel the host does not declare is
@@ -131,6 +159,8 @@ impl<T: SlackTransport + Send + 'static> Endpoint for ChannelThreadEndpoint<T> {
 pub struct ChannelEndpoint<T: SlackTransport> {
     threads: Shared<T>,
     declared: Vec<String>,
+    /// The id this binding is published under, and the resource `descriptions()` describes there.
+    resource: (&'static str, &'static str),
 }
 
 #[async_trait]
@@ -165,6 +195,11 @@ impl<T: SlackTransport + Send + 'static> Endpoint for ChannelEndpoint<T> {
     fn name(&self) -> &str {
         "urn:slack:channel"
     }
+
+    fn describe(&self) -> Description {
+        let (id, resource) = self.resource;
+        described(id, resource)
+    }
 }
 
 /// `urn:slack:channel:{name}:inbox`: the channel's inbox, which is the intray space of that name
@@ -195,6 +230,10 @@ impl Endpoint for InboxEndpoint {
     fn name(&self) -> &str {
         "urn:slack:channel:inbox"
     }
+
+    fn describe(&self) -> Description {
+        described("slack-channel-inbox", "urn:slack:channel:{name}:inbox")
+    }
 }
 
 /// The Slack resources. The reaction template is bound first: the thread template's final
@@ -217,6 +256,10 @@ pub fn slack_space<T: SlackTransport + Send + 'static>(
             ChannelEndpoint {
                 threads: Arc::clone(&threads),
                 declared: declared.clone(),
+                resource: (
+                    "slack-channel-reaction",
+                    "urn:slack:channel:{name}:thread:{key}:reaction:{reaction}",
+                ),
             },
         )
         .bind(
@@ -232,7 +275,11 @@ pub fn slack_space<T: SlackTransport + Send + 'static>(
         )
         .bind(
             UriTemplate::parse("urn:slack:channel:{rest}").expect("a fixed template"),
-            ChannelEndpoint { threads, declared },
+            ChannelEndpoint {
+                threads,
+                declared,
+                resource: ("slack-channel", "urn:slack:channel:{name}"),
+            },
         )
 }
 
@@ -313,6 +360,7 @@ fn literal(text: &str) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use ikigai_core::MetaRenderer;
     use roc_slack_door::FakeSlack;
 
     fn door(name: &str) -> (Kernel, Shared<FakeSlack>) {
@@ -322,6 +370,44 @@ mod tests {
         let threads = Arc::new(Mutex::new(Threads::open(&dir, "C1", FakeSlack::new()).unwrap()));
         let kernel = kernel(Arc::clone(&threads), dir.join("spaces"), vec!["gonk-chat".to_owned()]);
         (kernel, threads)
+    }
+
+    /// Renders a description as the lines a catalog reader sees: its id, title, summary, verbs.
+    struct PlainRenderer;
+
+    impl MetaRenderer for PlainRenderer {
+        fn render(&self, description: &Description, target: &ReprType) -> Result<Representation> {
+            let verbs: Vec<String> = description.verbs.iter().map(|v| format!("{v:?}")).collect();
+            let text = format!(
+                "id {}\ntitle {}\nsummary {}\nverbs {}\n\n",
+                description.id, description.title, description.summary, verbs.join(" ")
+            );
+            Ok(Representation::new(target.clone(), text.into_bytes()))
+        }
+    }
+
+    #[test]
+    fn the_catalog_describes_every_served_resource_from_its_meta() {
+        let dir = std::env::temp_dir().join(format!("roc-door-serve-catalog-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(&dir).unwrap();
+        let threads = Arc::new(Mutex::new(Threads::open(&dir, "C1", FakeSlack::new()).unwrap()));
+        let declared = vec!["gonk-chat".to_owned()];
+        let spaces: Vec<Arc<dyn Space>> = vec![Arc::new(slack_space(threads, declared, dir.join("spaces")))];
+        let kernel = Kernel::with_meta_renderer(Arc::new(Fallback::new(spaces)), Arc::new(PlainRenderer));
+        let request = Request::new(Verb::Source, Iri::parse("urn:kernel:catalog").unwrap());
+        let catalog = futures_executor::block_on(kernel.issue(request, &Capability::root())).unwrap();
+        let catalog = String::from_utf8(catalog.bytes).unwrap();
+        for meta in descriptions() {
+            assert!(catalog.contains(&format!("title {}\n", meta.resource)), "{} is not in the catalog: {catalog}", meta.resource);
+            assert!(catalog.contains(meta.description), "{} has no description in the catalog", meta.resource);
+            for (_, capability) in &meta.verbs {
+                assert!(catalog.contains(capability), "{capability} is not in the catalog");
+            }
+        }
+        for id in ["slack-channel", "slack-channel-thread", "slack-channel-reaction", "slack-channel-inbox"] {
+            assert!(catalog.contains(&format!("id {id}\n")), "no `{id}` in {catalog}");
+        }
     }
 
     fn issue(kernel: &Kernel, verb: Verb, iri: &str) -> Result<Representation> {
