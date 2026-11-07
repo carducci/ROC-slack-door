@@ -377,6 +377,28 @@ mod tests {
     }
 
     #[test]
+    fn a_post_with_two_refused_files_still_has_two_entries_to_a_match() {
+        // Spec `files`: "one entry per file". The tuple is RDF, and a host reads it by a SPARQL
+        // match over its graph, where two equal `slack:file "files-not-accepted"` triples are
+        // one: a post with two screenshots would read as a post with one.
+        let (kernel, _) = two_channel_door("two-refused-files");
+        let mut post = a_message("carducci-54", "U1", "two shots");
+        if let Delivery::Message { files, .. } = &mut post {
+            *files = vec!["files-not-accepted".to_owned(), "files-not-accepted".to_owned()];
+        }
+        drop_delivery(&kernel, "gonk-chat", &post).unwrap();
+        let two_files = "ASK { { SELECT (COUNT(*) AS ?n) WHERE { ?m <urn:slack:file> ?f } } \
+                         FILTER(?n = 2) }";
+        let request = Request::new(Verb::Delete, Iri::parse("urn:slack:channel:gonk-chat:inbox").unwrap())
+            .with_arg("match", ArgRef::Inline(two_files.as_bytes().to_vec()));
+        let taken = futures_executor::block_on(kernel.issue(request, &Capability::root()));
+        assert!(
+            taken.is_ok_and(|r| String::from_utf8_lossy(&r.bytes).contains("two shots")),
+            "a match for two file entries did not find the post with two files"
+        );
+    }
+
+    #[test]
     fn a_thumbs_up_is_taken_at_the_channels_inbox_address() {
         let (kernel, _) = two_channel_door("inbox-reaction");
         let up = Delivery::Reaction { key: "carducci-54".to_owned(), user: "U1".to_owned(), name: "+1".to_owned() };
