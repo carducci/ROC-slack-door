@@ -58,10 +58,11 @@ def items() -> list[tuple[int, str]]:
 
 
 class PrescribedCommandsTest(unittest.TestCase):
-    def test_rule_4_lists_the_merge_intention(self) -> None:
+    def test_rule_4_lists_no_merge_intention(self) -> None:
+        # carducci#1142 decided no `m` intention: a merge commit is git's own, and keeps its subject.
         bullet = INTENTION_BULLET.search(text())
         self.assertIsNotNone(bullet, "rule 4's intention bullet is missing")
-        self.assertIn("`m`", bullet.group(1), "rule 4 lists no intention for a merge commit")
+        self.assertNotIn("`m`", bullet.group(1), "rule 4 still lists an `m` merge intention")
 
     def test_rule_4_excepts_the_merge_commits_github_writes(self) -> None:
         rule = RULE_4.search(text())
@@ -72,8 +73,8 @@ class PrescribedCommandsTest(unittest.TestCase):
         for case in ["merging a pull request", "updating its branch from main"]:
             self.assertIn(case, exception, f"rule 4's exception does not name {case}")
         self.assertIn("keeps GitHub's subject", exception, "rule 4 does not say GitHub's merge keeps its subject")
-        self.assertRegex(exception, r"merge commit you write.*uses `m`",
-                         "rule 4 does not say a merge commit you write uses `m`")
+        self.assertRegex(exception, r"merge commit you write.*git merge --no-edit FETCH_HEAD.*Merge branch",
+                         "rule 4 does not say a merge commit you write is git's own merge")
 
     def test_the_continue_draft_guide_names_the_prescribed_merge_command(self) -> None:
         guide = CONTINUE_DRAFT_GUIDE.search(HARNESS.read_text(encoding="utf-8"))
