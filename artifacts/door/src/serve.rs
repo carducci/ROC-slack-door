@@ -311,19 +311,35 @@ pub fn kernel<T: SlackTransport + Send + 'static>(
 }
 
 /// Renders a `Description` as the JSON a mount forwards to a caller who asks for `Meta` with
-/// `as: application/json`: its id, title, summary and verbs.
+/// `as: application/json` (its id, title, summary and verbs), and as Turtle for the kernel's
+/// default and its catalog. Any other type is declined, so the kernel transrepts from the Turtle.
 struct JsonMeta;
 
 impl ikigai_core::MetaRenderer for JsonMeta {
     fn render(&self, description: &Description, target: &ReprType) -> Result<Representation> {
         let verbs: Vec<String> = description.verbs.iter().map(|verb| format!("{verb:?}")).collect();
-        let json = serde_json::json!({
-            "id": description.id,
-            "title": description.title,
-            "summary": description.summary,
-            "verbs": verbs,
-        });
-        Ok(Representation::new(target.clone(), json.to_string().into_bytes()))
+        let bytes = match target.media_type.as_str() {
+            "application/json" => serde_json::json!({
+                "id": description.id,
+                "title": description.title,
+                "summary": description.summary,
+                "verbs": verbs,
+            })
+            .to_string(),
+            "text/turtle" => {
+                let verbs: Vec<String> = verbs.iter().map(|verb| literal(verb)).collect();
+                format!(
+                    "@prefix dct: <http://purl.org/dc/terms/> .\n@prefix ik: <urn:ikigai:vocab:> .\n\
+                     [] dct:identifier {} ;\n   dct:title {} ;\n   dct:description {} ;\n   ik:verb {} .\n",
+                    literal(&description.id),
+                    literal(&description.title),
+                    literal(&description.summary),
+                    verbs.join(", ")
+                )
+            }
+            other => return Err(ikigai_core::Error::Endpoint(format!("the door renders no Meta as {other}"))),
+        };
+        Ok(Representation::new(target.clone(), bytes.into_bytes()))
     }
 }
 
