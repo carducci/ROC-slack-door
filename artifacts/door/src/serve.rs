@@ -307,7 +307,24 @@ pub fn kernel<T: SlackTransport + Send + 'static>(
     root: std::path::PathBuf,
     declared: Vec<String>,
 ) -> Kernel {
-    Kernel::new(Arc::new(slack_space(threads, declared, root)))
+    Kernel::with_meta_renderer(Arc::new(slack_space(threads, declared, root)), Arc::new(JsonMeta))
+}
+
+/// Renders a `Description` as the JSON a mount forwards to a caller who asks for `Meta` with
+/// `as: application/json`: its id, title, summary and verbs.
+struct JsonMeta;
+
+impl ikigai_core::MetaRenderer for JsonMeta {
+    fn render(&self, description: &Description, target: &ReprType) -> Result<Representation> {
+        let verbs: Vec<String> = description.verbs.iter().map(|verb| format!("{verb:?}")).collect();
+        let json = serde_json::json!({
+            "id": description.id,
+            "title": description.title,
+            "summary": description.summary,
+            "verbs": verbs,
+        });
+        Ok(Representation::new(target.clone(), json.to_string().into_bytes()))
+    }
 }
 
 /// Drops one delivery into the inbox space `space`, through the `intray` kernel under a capability
