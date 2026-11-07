@@ -105,12 +105,14 @@ fn described(id: &str, resource: &str) -> Description {
 pub struct ChannelThreadEndpoint<T: SlackTransport> {
     threads: Shared<T>,
     declared: Vec<String>,
+    /// The declared channel this binding is bound under by its literal name.
+    channel: String,
 }
 
 #[async_trait]
 impl<T: SlackTransport + Send + 'static> Endpoint for ChannelThreadEndpoint<T> {
     async fn invoke(&self, inv: &Invocation<'_>) -> Result<Representation> {
-        let channel = inv.bindings.get("name").unwrap_or_default();
+        let channel = self.channel.as_str();
         let key = inv.bindings.get("key").unwrap_or_default();
         let mut threads = self
             .threads
@@ -218,12 +220,14 @@ impl<T: SlackTransport + Send + 'static> Endpoint for ChannelEndpoint<T> {
 pub struct InboxEndpoint {
     spaces: Kernel,
     declared: Vec<String>,
+    /// The declared channel this binding is bound under by its literal name.
+    channel: String,
 }
 
 #[async_trait]
 impl Endpoint for InboxEndpoint {
     async fn invoke(&self, inv: &Invocation<'_>) -> Result<Representation> {
-        let name = inv.bindings.get("name").unwrap_or_default();
+        let name = self.channel.as_str();
         check_channel(&self.declared, name)
             .map_err(|refusal| to_error(ThreadError::Refused(refusal)))?;
         let needs = match inv.request.verb {
@@ -253,67 +257,67 @@ impl Endpoint for InboxEndpoint {
     }
 }
 
-/// The Slack resources. The reaction template is bound first: the thread template's final
-/// variable would otherwise take the whole reaction IRI as a key. The inbox template is bound
-/// after the channel's thread and reaction templates, so an address ending in `:inbox` that
-/// they match is theirs, and before the channel catch-all.
+/// The Slack resources, bound per declared channel. The reaction template is bound before the
+/// thread's: its final variable would otherwise take the whole reaction IRI as a key. The inbox
+/// template is bound after the thread and reaction templates, so an address ending in `:inbox`
+/// that they match is theirs, and before the catch-all.
 pub fn slack_space<T: SlackTransport + Send + 'static>(
     threads: Shared<T>,
     declared: Vec<String>,
     root: std::path::PathBuf,
 ) -> EndpointSpace {
-    let inbox = InboxEndpoint {
-        spaces: intray(root),
-        declared: declared.clone(),
-    };
     let mut space = EndpointSpace::new();
-    // A declared channel's own address is bound by its literal name: a `{name}` variable at the end
-    // would take the whole tail, and the Sink it describes would be claimed for every address below.
+    // Every channel's addresses are bound by its literal name, never a `{name}` variable: an
+    // address under an undeclared channel then matches only the catch-all, which describes no verbs
+    // and refuses as `no-channel`. A variable at the end of the channel's own address would also
+    // take the whole tail, and the Sink it describes would be claimed for every address below.
     for channel in &declared {
-        space = space.bind(
-            UriTemplate::parse(&format!("urn:slack:channel:{channel}")).expect("a declared channel"),
-            ChannelEndpoint {
-                threads: Arc::clone(&threads),
-                declared: declared.clone(),
-                resource: ("slack-channel", "urn:slack:channel:{name}"),
-                channel: Some(channel.clone()),
-            },
-        );
-    }
-    space
-        .bind(
-            UriTemplate::parse("urn:slack:channel:{name}:thread:{key}:reaction:{reaction}")
-                .expect("a fixed template"),
-            ChannelEndpoint {
-                threads: Arc::clone(&threads),
-                declared: declared.clone(),
-                resource: (
+        let channel_endpoint = |resource| ChannelEndpoint {
+            threads: Arc::clone(&threads),
+            declared: declared.clone(),
+            resource,
+            channel: Some(channel.clone()),
+        };
+        space = space
+            .bind(
+                UriTemplate::parse(&format!("urn:slack:channel:{channel}")).expect("a declared channel"),
+                channel_endpoint(("slack-channel", "urn:slack:channel:{name}")),
+            )
+            .bind(
+                UriTemplate::parse(&format!("urn:slack:channel:{channel}:thread:{{key}}:reaction:{{reaction}}"))
+                    .expect("a declared channel"),
+                channel_endpoint((
                     "slack-channel-reaction",
                     "urn:slack:channel:{name}:thread:{key}:reaction:{reaction}",
-                ),
-                channel: None,
-            },
-        )
-        .bind(
-            UriTemplate::parse("urn:slack:channel:{name}:thread:{key}").expect("a fixed template"),
-            ChannelThreadEndpoint {
-                threads: Arc::clone(&threads),
-                declared: declared.clone(),
-            },
-        )
-        .bind(
-            UriTemplate::parse("urn:slack:channel:{name}:inbox").expect("a fixed template"),
-            inbox,
-        )
-        .bind(
-            UriTemplate::parse("urn:slack:channel:{rest}").expect("a fixed template"),
-            ChannelEndpoint {
-                threads,
-                declared,
-                resource: ("", ""),
-                channel: None,
-            },
-        )
+                )),
+            )
+            .bind(
+                UriTemplate::parse(&format!("urn:slack:channel:{channel}:thread:{{key}}"))
+                    .expect("a declared channel"),
+                ChannelThreadEndpoint {
+                    threads: Arc::clone(&threads),
+                    declared: declared.clone(),
+                    channel: channel.clone(),
+                },
+            )
+            .bind(
+                UriTemplate::parse(&format!("urn:slack:channel:{channel}:inbox")).expect("a declared channel"),
+                InboxEndpoint {
+                    spaces: intray(root.clone()),
+                    declared: declared.clone(),
+                    channel: channel.clone(),
+                },
+            );
+    }
+    space.bind(
+        UriTemplate::parse("urn:slack:channel:{rest}").expect("a fixed template"),
+        ChannelEndpoint {
+            threads,
+            declared,
+            resource: ("", ""),
+            channel: None,
+        },
+    )
 }
 
 /// The intray spaces under `root`, as a kernel of their own. The door's kernel does not serve it:
@@ -350,13 +354,14 @@ impl ikigai_core::MetaRenderer for JsonMeta {
             .to_string(),
             "text/turtle" => {
                 let verbs: Vec<String> = verbs.iter().map(|verb| literal(verb)).collect();
+                // A predicate with no object is not Turtle: a description with no verbs has no `ik:verb`.
+                let verbs = if verbs.is_empty() { String::new() } else { format!(" ;\n   ik:verb {}", verbs.join(", ")) };
                 format!(
                     "@prefix dct: <http://purl.org/dc/terms/> .\n@prefix ik: <urn:ikigai:vocab:> .\n\
-                     [] dct:identifier {} ;\n   dct:title {} ;\n   dct:description {} ;\n   ik:verb {} .\n",
+                     [] dct:identifier {} ;\n   dct:title {} ;\n   dct:description {}{verbs} .\n",
                     literal(&description.id),
                     literal(&description.title),
                     literal(&description.summary),
-                    verbs.join(", ")
                 )
             }
             other => return Err(ikigai_core::Error::Endpoint(format!("the door renders no Meta as {other}"))),
