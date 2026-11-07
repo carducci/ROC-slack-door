@@ -75,18 +75,16 @@ class PrescribedCommandsTest(unittest.TestCase):
         self.assertRegex(exception, r"merge commit you write.*uses `m`",
                          "rule 4 does not say a merge commit you write uses `m`")
 
-    def test_the_continue_draft_guide_names_the_prescribed_merge_subject(self) -> None:
+    def test_the_continue_draft_guide_names_the_prescribed_merge_command(self) -> None:
         guide = CONTINUE_DRAFT_GUIDE.search(HARNESS.read_text(encoding="utf-8"))
         self.assertIsNotNone(guide, "harness.ttl has no guide:ask-dax-continue-draft with a comment")
-        subjects = MERGE_COMMAND.findall(text())
-        self.assertTrue(subjects, "AGENTS.md prescribes no `git merge -m` command")
-        for subject in subjects:
-            self.assertIn(f"`{subject}`", guide.group(1),
-                          f"guide:ask-dax-continue-draft does not name the subject AGENTS.md prescribes: {subject!r}")
+        self.assertIn("git merge --no-edit", text(), "AGENTS.md no longer prescribes `git merge --no-edit`")
+        self.assertIn("`git merge --no-edit FETCH_HEAD`", guide.group(1),
+                      "guide:ask-dax-continue-draft does not name the merge AGENTS.md prescribes")
 
     def test_a_prescribed_merge_subject_uses_the_merge_intention(self) -> None:
+        # Step 3 of Ask Dax uses `--no-edit`, which prescribes no subject; any `-m` subject must still be a merge.
         subjects = MERGE_COMMAND.findall(text())
-        self.assertTrue(subjects, "AGENTS.md prescribes no `git merge -m` command")
         for subject in subjects:
             risk, intention = subject.split(" ", 2)[:2]
             self.assertIn(risk, [".", "^", "!", "@", "<risk>"], subject)
