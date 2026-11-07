@@ -281,7 +281,8 @@ pub fn turtle(delivery: &Delivery) -> String {
             predicates.push(format!("slack:time {}", literal(time)));
             predicates.push(format!("slack:text {}", literal(text)));
             for file in files {
-                predicates.push(format!("slack:file {}", literal(file)));
+                // Each file is a node of its own: a bare literal repeated is one triple in RDF.
+                predicates.push(format!("slack:file [ slack:entry {} ]", literal(file)));
             }
         }
         Delivery::Reaction { key, user, name } => {
