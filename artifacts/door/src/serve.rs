@@ -484,6 +484,30 @@ mod tests {
         }
     }
 
+    /// What the door's kernel answers as Turtle is Turtle: a `Meta` with no `as` (the kernel's
+    /// default, `text/turtle`) and the catalog (one Turtle graph). A renderer that answers JSON
+    /// whatever type it is asked for labels JSON as Turtle, and the kernel never reaches the
+    /// transreption it falls back to when a renderer declines a type.
+    #[test]
+    fn what_the_doors_kernel_labels_turtle_is_not_json() {
+        let (kernel, _threads) = door("meta-turtle");
+        let is_json = |bytes: &[u8]| serde_json::from_slice::<serde_json::Value>(bytes).is_ok();
+        let request = Request::new(Verb::Meta, Iri::parse("urn:slack:channel:gonk-chat:inbox").unwrap());
+        if let Ok(answer) = futures_executor::block_on(kernel.issue(request, &Capability::root())) {
+            let text = String::from_utf8_lossy(&answer.bytes).into_owned();
+            assert!(
+                !(answer.repr_type.media_type == "text/turtle" && is_json(&answer.bytes)),
+                "a Meta asked as text/turtle is answered with JSON: {text}"
+            );
+        }
+        let request = Request::new(Verb::Source, Iri::parse("urn:kernel:catalog").unwrap());
+        if let Ok(catalog) = futures_executor::block_on(kernel.issue(request, &Capability::root())) {
+            let text = String::from_utf8_lossy(&catalog.bytes).into_owned();
+            let json_lines: Vec<&str> = text.lines().filter(|line| is_json(line.as_bytes())).collect();
+            assert!(json_lines.is_empty(), "the Turtle catalog holds JSON objects: {json_lines:?}");
+        }
+    }
+
     fn issue(kernel: &Kernel, verb: Verb, iri: &str) -> Result<Representation> {
         let mut request = Request::new(verb, Iri::parse(iri).unwrap());
         if verb == Verb::Sink {
