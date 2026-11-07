@@ -43,7 +43,7 @@ the door had opened it. Minted keys can't collide with a caller's keys unless a 
 
 ### D4. Capabilities are scoped by channel
 
-`urn:cap:slack:channel:{name}:{read,post,react}`. The inbox is read with `…:read`. The door
+`urn:cap:slack:channel:{name}:{read,post,react}`. The inbox, which serves only Source and Delete, is read and emptied with `…:read` alone. The door
 checks the capability for the channel the request names, before Slack is called. Whether the
 hub can grant a templated family or needs one string per channel doesn't matter here: the
 door checks exact strings.
@@ -89,8 +89,11 @@ kept.
     between and never matches.
   - In the door's and the library's own `cargo test`, also run by `python3 scripts/test.py`,
     through the kernel: `Exists` and `Sink` on `urn:slack:thread:k` and on
-    `urn:slack:thread:k:reaction:x` answer that nothing is bound there (not a thread's
-    `no-thread` or a channel's `no-channel`, which an endpoint answers), and every capability
+    `urn:slack:thread:k:reaction:x` answer that nothing is bound there: the kernel's own
+    `no endpoint resolved for <iri>`, not any endpoint's answer (a thread's `no-thread`, a
+    channel's `no-channel`, a reaction's verb refusal), checked on all four pairs; a kernel
+    with the old reaction template bound to a stand-in endpoint fails that check. And
+    `urn:space:{name}` is bound to nothing in the door's kernel under any capability. And every capability
     in `descriptions()` starts with `urn:cap:slack:channel:`. These check what is served,
     however it is spelled.
 

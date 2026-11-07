@@ -50,7 +50,8 @@ admit a request in another.
 ### Requirement: The host declares the channels
 
 The configuration SHALL list the channels the door serves, each by a name of its own (1 to 40
-lowercase letters, digits and `-`) with its Slack channel id and the Slack user ids of its
+lowercase letters, digits and `-`, starting with a lowercase letter or digit, because a
+capability scope that starts with `-` is an exclusion nobody holds) with its Slack channel id and the Slack user ids of its
 speakers. The door MUST refuse to start when no channel is declared, when a name is invalid or
 declared twice, or when a channel has no id or no speakers, naming the channel. It MUST refuse to
 start when a channel's id is not a Slack channel id. The value is first trimmed of leading and
@@ -84,3 +85,8 @@ Slack.
 
 - **WHEN** a caller writes to `urn:slack:channel:random:thread:x`
 - **THEN** it is refused as `no-channel`, and nothing is posted
+
+#### Scenario: A channel name starting with a dash stops the start
+
+- **WHEN** the host declares a channel named `-ops`
+- **THEN** the door refuses to start, naming `-ops` and `SLACK_CHANNELS`

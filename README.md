@@ -20,7 +20,7 @@ written against them can move to another chat system by swapping the door undern
 |---|---|---|
 | `urn:slack:channel:{name}:thread:{key}` | source, sink, exists | A conversation, named by a key the caller chooses. The first write opens it as a new message in the channel; later writes reply in the thread. Reading returns the conversation as JSON, with no Slack ids in it. |
 | `urn:slack:channel:{name}:thread:{key}:reaction:{reaction}` | sink, delete | A reaction on the thread's opening message (`white_check_mark`, for example). |
-| `urn:slack:channel:{name}:inbox` ([ikigai-intray](https://crates.io/crates/ikigai-intray)) | the space's own | Where replies and reactions from a channel's speakers land, tagged with the thread's key. A speaker's message that starts a new conversation is recorded as a thread and lands under a key the door mints (`m-` and its time, e.g. `m-1700000000-000001`), so a reply goes under it. |
+| `urn:slack:channel:{name}:inbox` ([ikigai-intray](https://crates.io/crates/ikigai-intray)) | Source and Delete, gated by `urn:cap:slack:channel:{name}:read`; every other verb, Sink included, is refused | Where replies and reactions from a channel's speakers land, tagged with the thread's key. A speaker's message that starts a new conversation is recorded as a thread and lands under a key the door mints (`m-` and its time, e.g. `m-1700000000-000001`), so a reply goes under it. |
 
 Three capabilities gate the verbs, each scoped to the channel it acts in:
 `urn:cap:slack:channel:{name}:read` (a thread, and the inbox), `urn:cap:slack:channel:{name}:post`
@@ -155,9 +155,9 @@ Then it names the resources through the alias: `urn:sd:slack:channel:<name>:thre
 thread, `urn:sd:slack:channel:<name>:inbox` for that channel's inbox, and
 `urn:sd:slack:channel:<name>:thread:<key>:reaction:<reaction>` for a reaction. One alias mount
 serves every channel, because `--mount` strips its prefix (`urn:slack:channel:<name>:thread:x`
-would reach the door as `urn:channel:<name>:thread:x`, which it does not serve). Each channel has
-its own inbox, so mount nothing under `urn:space:`: it is also served locally, and a mount there
-would never reach the door.
+would reach the door as `urn:channel:<name>:thread:x`, which it does not serve). The door does not
+serve `urn:space:{name}` at all: each inbox is reached only at its channel name, under that
+channel's `read` capability, so mount nothing under `urn:space:`.
 
 Only the machine that runs the door should hold the socket; the socket is not a network
 address, and it is not exposed beyond that machine.
