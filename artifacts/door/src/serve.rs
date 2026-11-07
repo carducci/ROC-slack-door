@@ -311,19 +311,35 @@ pub fn kernel<T: SlackTransport + Send + 'static>(
 }
 
 /// Renders a `Description` as the JSON a mount forwards to a caller who asks for `Meta` with
-/// `as: application/json`: its id, title, summary and verbs.
+/// `as: application/json` (its id, title, summary and verbs), and as Turtle for the kernel's
+/// default and its catalog. Any other type is declined, so the kernel transrepts from the Turtle.
 struct JsonMeta;
 
 impl ikigai_core::MetaRenderer for JsonMeta {
     fn render(&self, description: &Description, target: &ReprType) -> Result<Representation> {
         let verbs: Vec<String> = description.verbs.iter().map(|verb| format!("{verb:?}")).collect();
-        let json = serde_json::json!({
-            "id": description.id,
-            "title": description.title,
-            "summary": description.summary,
-            "verbs": verbs,
-        });
-        Ok(Representation::new(target.clone(), json.to_string().into_bytes()))
+        let bytes = match target.media_type.as_str() {
+            "application/json" => serde_json::json!({
+                "id": description.id,
+                "title": description.title,
+                "summary": description.summary,
+                "verbs": verbs,
+            })
+            .to_string(),
+            "text/turtle" => {
+                let verbs: Vec<String> = verbs.iter().map(|verb| literal(verb)).collect();
+                format!(
+                    "@prefix dct: <http://purl.org/dc/terms/> .\n@prefix ik: <urn:ikigai:vocab:> .\n\
+                     [] dct:identifier {} ;\n   dct:title {} ;\n   dct:description {} ;\n   ik:verb {} .\n",
+                    literal(&description.id),
+                    literal(&description.title),
+                    literal(&description.summary),
+                    verbs.join(", ")
+                )
+            }
+            other => return Err(ikigai_core::Error::Endpoint(format!("the door renders no Meta as {other}"))),
+        };
+        Ok(Representation::new(target.clone(), bytes.into_bytes()))
     }
 }
 
@@ -481,6 +497,30 @@ mod tests {
                 .unwrap_or_default();
             assert!(summary.contains(meta.description), "{iri} is described as {answer}");
             assert!(!answer.contains("xoxb-") && !answer.contains("xapp-"), "{iri}: {answer}");
+        }
+    }
+
+    /// What the door's kernel answers as Turtle is Turtle: a `Meta` with no `as` (the kernel's
+    /// default, `text/turtle`) and the catalog (one Turtle graph). A renderer that answers JSON
+    /// whatever type it is asked for labels JSON as Turtle, and the kernel never reaches the
+    /// transreption it falls back to when a renderer declines a type.
+    #[test]
+    fn what_the_doors_kernel_labels_turtle_is_not_json() {
+        let (kernel, _threads) = door("meta-turtle");
+        let is_json = |bytes: &[u8]| serde_json::from_slice::<serde_json::Value>(bytes).is_ok();
+        let request = Request::new(Verb::Meta, Iri::parse("urn:slack:channel:gonk-chat:inbox").unwrap());
+        if let Ok(answer) = futures_executor::block_on(kernel.issue(request, &Capability::root())) {
+            let text = String::from_utf8_lossy(&answer.bytes).into_owned();
+            assert!(
+                !(answer.repr_type.media_type == "text/turtle" && is_json(&answer.bytes)),
+                "a Meta asked as text/turtle is answered with JSON: {text}"
+            );
+        }
+        let request = Request::new(Verb::Source, Iri::parse("urn:kernel:catalog").unwrap());
+        if let Ok(catalog) = futures_executor::block_on(kernel.issue(request, &Capability::root())) {
+            let text = String::from_utf8_lossy(&catalog.bytes).into_owned();
+            let json_lines: Vec<&str> = text.lines().filter(|line| is_json(line.as_bytes())).collect();
+            assert!(json_lines.is_empty(), "the Turtle catalog holds JSON objects: {json_lines:?}");
         }
     }
 
