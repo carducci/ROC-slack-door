@@ -10,7 +10,7 @@ Waits for `channel-resources`: these names sit under `urn:slack:channel:{name}`.
 ## 2. The object store (`slack`)
 
 - [ ] 2.1 Store bytes at `objects/xx/yy/<rest>` by `ContentId::of`, write-once through a temp name and rename, jailed by `ikigai-fs` (A file is kept by its content)
-- [ ] 2.2 Per-channel index (`files/{channel}.tsv`), and deletion that removes the object only when no channel names it (Deleting a file removes its name)
+- [x] 2.2 Per-channel index (`files/{channel}.tsv`), and deletion that removes the object only when no channel names it (Deleting a file removes its name)
 
 ## 3. Intake and serving (`slack`, `door`)
 
