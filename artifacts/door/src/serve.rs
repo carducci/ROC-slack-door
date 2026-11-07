@@ -1,9 +1,10 @@
 //! The served space: `urn:slack:channel:{name}:thread:{key}` and its reactions as endpoints in a
 //! kernel, plus the inbox space the door drops deliveries into, all behind one `Kernel` that
 //! another kernel mounts over a Unix socket. Every verb needs the caller's `Capability` to hold
-//! `urn:cap:slack:channel:{name}:{read,post,react}` for the channel it acts in. The door writes
-//! the inbox through the kernel, as any caller would, under a capability that holds only the
-//! intray's `out`.
+//! `urn:cap:slack:channel:{name}:{read,post,react}` for the channel it acts in. The intray is not
+//! served by that kernel: the inbox endpoint reads and takes through a kernel of its own, and the
+//! door writes deliveries through the same kind, under a capability that holds only the intray's
+//! `out`.
 
 use std::sync::{Arc, Mutex};
 
@@ -168,7 +169,11 @@ impl<T: SlackTransport + Send + 'static> Endpoint for ChannelEndpoint<T> {
 }
 
 /// `urn:slack:channel:{name}:inbox`: the channel's inbox, which is the intray space of that name
-/// under the state directory. Source, sink and delete go to the space with the caller's capability.
+/// under the state directory. Only Source and Delete are served, and each needs the channel's
+/// `read` and nothing else: the intray is called through a kernel no caller can address, under the
+/// root capability narrowed to the one intray capability that verb needs. Every other verb, Sink
+/// included, is refused before the intray is touched, so a caller never writes a tuple into an
+/// inbox; only the door's own deliveries do (`drop_delivery`).
 pub struct InboxEndpoint {
     spaces: Kernel,
     declared: Vec<String>,
@@ -180,16 +185,22 @@ impl Endpoint for InboxEndpoint {
         let name = inv.bindings.get("name").unwrap_or_default();
         check_channel(&self.declared, name)
             .map_err(|refusal| to_error(ThreadError::Refused(refusal)))?;
+        let needs = match inv.request.verb {
+            Verb::Source => ikigai_intray::CAP_READ,
+            Verb::Delete => ikigai_intray::CAP_TAKE,
+            other => {
+                return Err(Error::Endpoint(format!(
+                    "urn:slack:channel:{{name}}:inbox takes source and delete, not {other:?}"
+                )))
+            }
+        };
         require(inv.capability, name, READ)
             .map_err(|refusal| to_error(ThreadError::Refused(refusal)))?;
         let target = Iri::parse(&format!("urn:space:{name}"))
             .map_err(|e| Error::Endpoint(format!("{e:?}")))?;
         let mut request = inv.request.clone();
         request.target = target;
-        if inv.request.verb == Verb::Sink {
-            request = request.with_arg("content", ArgRef::Inline(text_of(inv)?.into_bytes()));
-        }
-        self.spaces.issue(request, inv.capability).await
+        self.spaces.issue(request, &Capability::root().attenuate([needs])).await
     }
 
     fn name(&self) -> &str {
@@ -207,7 +218,7 @@ pub fn slack_space<T: SlackTransport + Send + 'static>(
     root: std::path::PathBuf,
 ) -> EndpointSpace {
     let inbox = InboxEndpoint {
-        spaces: Kernel::new(Arc::new(ikigai_intray::space(root))),
+        spaces: intray(root),
         declared: declared.clone(),
     };
     EndpointSpace::new()
@@ -236,28 +247,31 @@ pub fn slack_space<T: SlackTransport + Send + 'static>(
         )
 }
 
-/// The kernel that serves both spaces: the Slack resources, and the intray spaces under `root`.
+/// The intray spaces under `root`, as a kernel of their own. The door's kernel does not serve it:
+/// the inbox endpoint and `drop_delivery` are the only ways in.
+pub fn intray(root: std::path::PathBuf) -> Kernel {
+    Kernel::new(Arc::new(ikigai_intray::space(root)))
+}
+
+/// The kernel the door serves: the Slack resources only. `urn:space:{name}` is bound to nothing
+/// here, under any capability; the inboxes are reached at `urn:slack:channel:{name}:inbox`.
 pub fn kernel<T: SlackTransport + Send + 'static>(
     threads: Shared<T>,
     root: std::path::PathBuf,
     declared: Vec<String>,
 ) -> Kernel {
-    let spaces: Vec<Arc<dyn Space>> = vec![
-        Arc::new(slack_space(threads, declared, root.clone())),
-        Arc::new(ikigai_intray::space(root)),
-    ];
-    Kernel::new(Arc::new(Fallback::new(spaces)))
+    Kernel::new(Arc::new(slack_space(threads, declared, root)))
 }
 
-/// Drops one delivery into the inbox space `space`, through the kernel under a capability that
-/// holds only the intray's `out`, which the intray does not scope to one space. The tuple is
+/// Drops one delivery into the inbox space `space`, through the `intray` kernel under a capability
+/// that holds only the intray's `out`, which the intray does not scope to one space. The tuple is
 /// Turtle, so a host can match it with a SPARQL template.
-pub fn drop_delivery(kernel: &Kernel, space: &str, delivery: &Delivery) -> std::result::Result<(), String> {
+pub fn drop_delivery(intray: &Kernel, space: &str, delivery: &Delivery) -> std::result::Result<(), String> {
     let target = Iri::parse(&format!("urn:space:{space}")).map_err(|e| format!("{e:?}"))?;
     let request = Request::new(Verb::Sink, target)
         .with_arg("content", ArgRef::Inline(turtle(delivery).into_bytes()));
     let capability = Capability::root().attenuate([ikigai_intray::CAP_OUT]);
-    futures_executor::block_on(kernel.issue(request, &capability))
+    futures_executor::block_on(intray.issue(request, &capability))
         .map(|_| ())
         .map_err(|e| e.to_string())
 }
@@ -348,6 +362,11 @@ mod tests {
         (kernel, threads)
     }
 
+    /// The intray the door of `two_channel_door(name)` reads and writes, as the test's own handle.
+    fn intray_of(name: &str) -> Kernel {
+        intray(std::env::temp_dir().join(format!("roc-door-serve-{name}-{}", std::process::id())).join("spaces"))
+    }
+
     fn a_message(key: &str, user: &str, text: &str) -> Delivery {
         Delivery::Message {
             key: Some(key.to_owned()),
@@ -360,10 +379,10 @@ mod tests {
     #[test]
     fn a_delivery_is_read_and_taken_at_the_channels_inbox_address() {
         let (kernel, _) = two_channel_door("inbox-address");
-        drop_delivery(&kernel, "gonk-chat", &a_message("carducci-54", "U1", "hi")).unwrap();
+        drop_delivery(&intray_of("inbox-address"), "gonk-chat", &a_message("carducci-54", "U1", "hi")).unwrap();
         let inbox = "urn:slack:channel:gonk-chat:inbox";
         let text = |r: Result<Representation>| String::from_utf8(r.unwrap().bytes.to_vec()).unwrap();
-        let backing = text(issue(&kernel, Verb::Source, "urn:space:gonk-chat"));
+        let backing = text(issue(&intray_of("inbox-address"), Verb::Source, "urn:space:gonk-chat"));
         assert_eq!(text(issue(&kernel, Verb::Source, inbox)), backing);
         let taken = text(issue(&kernel, Verb::Delete, inbox));
         assert!(taken.contains("carducci-54") && taken.contains("U1") && taken.contains("hi"), "{taken}");
@@ -375,7 +394,7 @@ mod tests {
     fn a_thumbs_up_is_taken_at_the_channels_inbox_address() {
         let (kernel, _) = two_channel_door("inbox-reaction");
         let up = Delivery::Reaction { key: "carducci-54".to_owned(), user: "U1".to_owned(), name: "+1".to_owned() };
-        drop_delivery(&kernel, "gonk-chat", &up).unwrap();
+        drop_delivery(&intray_of("inbox-reaction"), "gonk-chat", &up).unwrap();
         let taken = issue(&kernel, Verb::Delete, "urn:slack:channel:gonk-chat:inbox").unwrap();
         let taken = String::from_utf8(taken.bytes.to_vec()).unwrap();
         assert!(taken.contains("slack:Reaction") && taken.contains("carducci-54") && taken.contains("+1"), "{taken}");
@@ -404,8 +423,8 @@ mod tests {
     #[test]
     fn a_delete_aimed_at_one_tuple_takes_that_tuple_and_leaves_the_other() {
         let (kernel, _) = two_channel_door("inbox-targeted");
-        drop_delivery(&kernel, "gonk-chat", &a_message("first-1", "U1", "one")).unwrap();
-        drop_delivery(&kernel, "gonk-chat", &a_message("second-2", "U2", "two")).unwrap();
+        drop_delivery(&intray_of("inbox-targeted"), "gonk-chat", &a_message("first-1", "U1", "one")).unwrap();
+        drop_delivery(&intray_of("inbox-targeted"), "gonk-chat", &a_message("second-2", "U2", "two")).unwrap();
         let inbox = std::env::temp_dir()
             .join(format!("roc-door-serve-inbox-targeted-{}", std::process::id()))
             .join("spaces/gonk-chat/inbox");
@@ -655,16 +674,76 @@ mod tests {
         // under artifacts/, does not refuse this test.
         let thread = format!("urn:slack:{}:k", "thread");
         for iri in [thread.clone(), format!("{thread}:reaction:x")] {
+            // Exists and Sink on each of the two old names: four pairs.
             for verb in [Verb::Exists, Verb::Sink] {
-                let error = issue(&kernel, verb, &iri).unwrap_err().to_string();
-                let lower = error.to_lowercase();
-                assert!(
-                    !lower.contains("no thread") && !lower.contains("no-channel") && !lower.contains("not-granted"),
-                    "{verb:?} {iri}: an endpoint answered: {error}"
-                );
+                assert_eq!(nothing_is_bound(&kernel, verb, &iri), Ok(()));
             }
         }
         assert!(threads.lock().unwrap().transport().posts().is_empty());
+    }
+
+    /// Whether the kernel answers that nothing is bound at `iri`: its own `no endpoint resolved`
+    /// answer, not the answer of any endpoint. `Err` carries what it answered instead.
+    fn nothing_is_bound(kernel: &Kernel, verb: Verb, iri: &str) -> std::result::Result<(), String> {
+        match issue(kernel, verb, iri) {
+            Ok(_) => Err(format!("{verb:?} {iri}: answered ok")),
+            Err(Error::Unresolved(asked)) if asked.to_string() == iri => Ok(()),
+            Err(error) => Err(format!("{verb:?} {iri}: {error:?}")),
+        }
+    }
+
+    struct StandIn;
+
+    #[async_trait]
+    impl Endpoint for StandIn {
+        async fn invoke(&self, _: &Invocation<'_>) -> Result<Representation> {
+            Err(Error::Endpoint("a thread reaction takes sink and delete, not Exists".to_owned()))
+        }
+
+        fn name(&self) -> &str {
+            "stand-in"
+        }
+    }
+
+    #[test]
+    fn the_unbound_check_fails_when_an_endpoint_answers_at_an_old_name() {
+        let thread = format!("urn:slack:{}:k", "thread");
+        let rebound = EndpointSpace::new().bind(
+            UriTemplate::parse(&format!("{thread}:reaction:{{reaction}}")).unwrap(),
+            StandIn,
+        );
+        let kernel = Kernel::new(Arc::new(rebound));
+        let iri = format!("{thread}:reaction:x");
+        let error = nothing_is_bound(&kernel, Verb::Exists, &iri).unwrap_err();
+        assert!(error.contains("a thread reaction takes sink and delete"), "{error}");
+        assert_eq!(nothing_is_bound(&kernel, Verb::Exists, &format!("{thread}:other")), Ok(()));
+    }
+
+    struct Echo;
+
+    #[async_trait]
+    impl Endpoint for Echo {
+        async fn invoke(&self, invocation: &Invocation<'_>) -> Result<Representation> {
+            Err(Error::Endpoint(format!("no endpoint resolved for {}", invocation.request.target)))
+        }
+
+        fn name(&self) -> &str {
+            "echo"
+        }
+    }
+
+    #[test]
+    fn the_unbound_check_fails_when_an_endpoint_echoes_the_unresolved_text() {
+        let thread = format!("urn:slack:{}:k", "thread");
+        let rebound = EndpointSpace::new().bind(
+            UriTemplate::parse(&format!("{thread}:reaction:{{reaction}}")).unwrap(),
+            Echo,
+        );
+        let kernel = Kernel::new(Arc::new(rebound));
+        let iri = format!("{thread}:reaction:x");
+        for verb in [Verb::Exists, Verb::Sink] {
+            assert!(nothing_is_bound(&kernel, verb, &iri).is_err(), "{verb:?}");
+        }
     }
 
     #[test]
@@ -698,7 +777,7 @@ mod tests {
     #[test]
     fn the_inbox_needs_the_channels_read_capability_for_source_and_delete() {
         let (kernel, _) = two_channel_door("inbox-gate");
-        drop_delivery(&kernel, "gonk-chat", &a_message("carducci-54", "U1", "hi")).unwrap();
+        drop_delivery(&intray_of("inbox-gate"), "gonk-chat", &a_message("carducci-54", "U1", "hi")).unwrap();
         let inbox = "urn:slack:channel:gonk-chat:inbox";
         let fixme_only = holding(&[("fixme", "read")]);
         for verb in [Verb::Source, Verb::Delete] {
@@ -709,9 +788,68 @@ mod tests {
     }
 
     #[test]
+    fn the_channels_read_alone_sources_and_deletes_its_inbox_and_no_other() {
+        let (kernel, _) = two_channel_door("inbox-read-alone");
+        let intray = intray_of("inbox-read-alone");
+        drop_delivery(&intray, "gonk-chat", &a_message("g-1", "U1", "here")).unwrap();
+        drop_delivery(&intray, "fixme", &a_message("f-1", "U2", "there")).unwrap();
+        let read = holding(&[("gonk-chat", "read")]);
+        let ids = |space: &str| text_of_reply(issue(&intray, Verb::Source, &format!("urn:space:{space}")).unwrap());
+        let seen = text_of_reply(issue_as(&kernel, Verb::Source, "urn:slack:channel:gonk-chat:inbox", &read).unwrap());
+        assert!(!seen.is_empty() && seen == ids("gonk-chat") && seen != ids("fixme"), "{seen}");
+        let other = issue_as(&kernel, Verb::Source, "urn:slack:channel:fixme:inbox", &read).unwrap_err().to_string();
+        assert!(other.contains("not-granted") && other.contains("urn:cap:slack:channel:fixme:read"), "{other}");
+        let taken = text_of_reply(issue_as(&kernel, Verb::Delete, "urn:slack:channel:gonk-chat:inbox", &read).unwrap());
+        assert!(taken.contains("g-1"), "{taken}");
+        let other = issue_as(&kernel, Verb::Delete, "urn:slack:channel:fixme:inbox", &read).unwrap_err().to_string();
+        assert!(other.contains("not-granted"), "{other}");
+        let left = text_of_reply(issue(&kernel, Verb::Delete, "urn:slack:channel:fixme:inbox").unwrap());
+        assert!(left.contains("f-1"), "{left}");
+    }
+
+    #[test]
+    fn the_intray_is_bound_to_nothing_in_the_doors_kernel_under_any_capability() {
+        let (kernel, _) = two_channel_door("intray-unbound");
+        drop_delivery(&intray_of("intray-unbound"), "fixme", &a_message("f-1", "U2", "there")).unwrap();
+        let held = holding(&[("gonk-chat", "read"), ("gonk-chat", "post")])
+            .attenuate(["urn:cap:space:read", "urn:cap:space:read*", "urn:cap:space:take", "urn:cap:space:out"]);
+        for capability in [&held, &Capability::root()] {
+            for verb in [Verb::Source, Verb::Delete, Verb::Sink, Verb::Exists] {
+                let error = issue_as(&kernel, verb, "urn:space:fixme", capability).unwrap_err().to_string();
+                assert!(error.contains("no endpoint resolved for urn:space:fixme"), "{verb:?}: {error}");
+            }
+        }
+        let still = text_of_reply(issue(&kernel, Verb::Delete, "urn:slack:channel:fixme:inbox").unwrap());
+        assert!(still.contains("f-1"), "{still}");
+    }
+
+    #[test]
+    fn a_sink_to_a_channels_inbox_writes_nothing_under_any_capability() {
+        let (kernel, _) = two_channel_door("inbox-sink");
+        let inbox = "urn:slack:channel:gonk-chat:inbox";
+        let write = Capability::root().attenuate(["urn:cap:space:out"]);
+        for capability in [
+            holding(&[("gonk-chat", "read")]),
+            holding(&[("gonk-chat", "post")]),
+            holding(&[("gonk-chat", "read")]).attenuate(["urn:cap:space:out"]),
+            write,
+            Capability::root(),
+        ] {
+            assert!(issue_as(&kernel, Verb::Sink, inbox, &capability).is_err());
+        }
+        let path = std::env::temp_dir()
+            .join(format!("roc-door-serve-inbox-sink-{}", std::process::id()))
+            .join("spaces/gonk-chat/inbox");
+        let written = std::fs::read_dir(&path).map(|d| d.count()).unwrap_or(0);
+        assert_eq!(written, 0);
+        let seen = issue(&kernel, Verb::Source, inbox).map(text_of_reply).unwrap_or_default();
+        assert!(!seen.contains("hello"), "{seen}");
+    }
+
+    #[test]
     fn a_delivery_is_dropped_under_a_capability_that_can_only_write_the_intray() {
         let (kernel, _) = two_channel_door("drop-narrow");
-        drop_delivery(&kernel, "fixme", &a_message("k-1", "U1", "hi")).unwrap();
+        drop_delivery(&intray_of("drop-narrow"), "fixme", &a_message("k-1", "U1", "hi")).unwrap();
         let taken = issue(&kernel, Verb::Delete, "urn:slack:channel:fixme:inbox").unwrap();
         assert!(String::from_utf8(taken.bytes.to_vec()).unwrap().contains("k-1"));
     }

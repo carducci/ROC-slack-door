@@ -88,11 +88,9 @@ fn run(config: Config) -> ExitCode {
     };
 
     let declared = config.channels.iter().map(|c| c.name.clone()).collect();
-    let kernel = Arc::new(serve::kernel(
-        Arc::clone(&threads),
-        config.state_dir.join("spaces"),
-        declared,
-    ));
+    let spaces = config.state_dir.join("spaces");
+    let intray = serve::intray(spaces.clone());
+    let kernel = Arc::new(serve::kernel(Arc::clone(&threads), spaces, declared));
     let socket_path = config.state_dir.join("door.sock");
     println!("roc-slack-door: serving {}", socket_path.display());
     let serving = Arc::clone(&kernel);
@@ -125,7 +123,7 @@ fn run(config: Config) -> ExitCode {
                 .collect::<Vec<_>>()
         };
         for (name, delivery) in &deliveries {
-            if let Err(why) = serve::drop_delivery(&kernel, name, delivery) {
+            if let Err(why) = serve::drop_delivery(&intray, name, delivery) {
                 eprintln!("roc-slack-door: a delivery was not written to the inbox: {why}");
             }
         }
