@@ -86,8 +86,10 @@ to it (`/invite @<bot name>`).
 - **Bot token** (`xoxb-…`): the app's *OAuth & Permissions* page, after installing.
 - **App-level token** (`xapp-…`): *Basic Information*, *App-Level Tokens*, with the
   `connections:write` scope.
-- **Channel id** (`C0000000000`): the channel's details, at the bottom.
-- **Allowed people** (`U0000000000`, comma separated): each person's profile, *More*, *Copy member ID*.
+- **Channel ids** (`C0000000000`): each channel's details, at the bottom. Invite the bot to
+  every channel the door serves.
+- **Speakers** (`U0000000000`, comma separated): each channel's allowed people, from each
+  person's profile, *More*, *Copy member ID*.
 
 ### 3. Configure the door
 
@@ -96,14 +98,23 @@ Write `KEY=VALUE` lines to a file only you can read (`chmod 600`):
 ```sh
 SLACK_BOT_TOKEN=xoxb-<your bot token>
 SLACK_APP_TOKEN=xapp-<your app-level token>
-SLACK_CHANNEL=C0000000000
-SLACK_ALLOWED_USERS=U0000000000,U0000000001
+SLACK_CHANNELS=gonk-chat,fixme
+SLACK_CHANNEL_GONK_CHAT_ID=C0000000000
+SLACK_CHANNEL_GONK_CHAT_SPEAKERS=U0000000000,U0000000001
+SLACK_CHANNEL_FIXME_ID=C0000000001
+SLACK_CHANNEL_FIXME_SPEAKERS=U0000000002
 ROC_STATE_DIR=/home/<you>/.local/state/roc-slack-door
-ROC_INBOX_SPACE=<inbox name>
 ```
 
-Environment variables of the same names override the file. The door refuses to start and names
-whichever of the six are missing.
+`SLACK_CHANNELS` lists the channels by the names you give them (1 to 40 lowercase letters,
+digits and `-`); those names are what appear in the resources, as
+`urn:slack:channel:gonk-chat:thread:<key>`. For each name, `SLACK_CHANNEL_<NAME>_ID` is its Slack
+channel id and `SLACK_CHANNEL_<NAME>_SPEAKERS` the people whose messages reach its inbox, with
+the name in capitals and `-` as `_`. Environment variables of the same names override the file.
+The door refuses to start and names whatever is missing or wrong: a token, the state directory,
+no channel, a name that is invalid or repeated, a channel with no id or no speakers. It also
+refuses the retired `SLACK_CHANNEL`, `SLACK_ALLOWED_USERS` and `ROC_INBOX_SPACE`, naming what
+replaces each.
 
 ### 4. Run it as a user service
 
@@ -141,11 +152,12 @@ ikigai --mount "urn:sd:=<state dir>/door.sock"
 ```
 
 Then it names the resources through the alias: `urn:sd:slack:channel:<name>:thread:<key>` for a
-thread and `urn:sd:space:<inbox name>` for the inbox, and
-`urn:sd:slack:channel:<name>:thread:<key>:reaction:<reaction>` for a reaction. One alias mount,
-because `--mount` strips its prefix (`urn:slack:channel:<name>:thread:x` would reach the door as
-`urn:channel:<name>:thread:x`, which it does not serve) and `urn:space:` is also served locally,
-so a mount there would never reach the door.
+thread, `urn:sd:slack:channel:<name>:inbox` for that channel's inbox, and
+`urn:sd:slack:channel:<name>:thread:<key>:reaction:<reaction>` for a reaction. One alias mount
+serves every channel, because `--mount` strips its prefix (`urn:slack:channel:<name>:thread:x`
+would reach the door as `urn:channel:<name>:thread:x`, which it does not serve). Each channel has
+its own inbox, so mount nothing under `urn:space:`: it is also served locally, and a mount there
+would never reach the door.
 
 Only the machine that runs the door should hold the socket; the socket is not a network
 address, and it is not exposed beyond that machine.

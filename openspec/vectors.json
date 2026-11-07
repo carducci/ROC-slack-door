@@ -27,6 +27,20 @@
       ]
     },
     {
+      "id": "urn:openspec:spec:configuration:requirement:secrets-never-leave-the-door:scenario:describing-a-channel-a-reaction-and-an-inbox",
+      "steps": [
+        {
+          "describe": "urn:slack:channel:{name}"
+        },
+        {
+          "describe": "urn:slack:channel:{name}:thread:{key}:reaction:{reaction}"
+        },
+        {
+          "describe": "urn:slack:channel:{name}:inbox"
+        }
+      ]
+    },
+    {
       "id": "urn:openspec:spec:configuration:requirement:capabilities-gate-the-verbs:scenario:posting-without-the-capability",
       "steps": [
         {
