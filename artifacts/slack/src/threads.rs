@@ -560,6 +560,7 @@ mod tests {
             ts: "1700000100.000001".to_owned(),
             thread: Some(root),
             text: "Which token?".to_owned(),
+            files: Vec::new(),
         });
         let entries = threads.read(&all(), "carducci-54").unwrap();
         assert_eq!(entries.len(), 2);

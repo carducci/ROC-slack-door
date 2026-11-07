@@ -139,6 +139,7 @@ fn delivery_json(delivery: &Delivery) -> Value {
             user,
             time,
             text,
+            ..
         } => json!({ "key": key, "user": user, "time": time, "text": text }),
         Delivery::Reaction { key, user, name } => json!({ "key": key, "user": user, "reaction": name }),
     }
@@ -210,6 +211,7 @@ fn run_step(world: &mut World, step: &Value) -> Result<(), String> {
                     ts: format!("1700000{:03}.000001", 100 + n),
                     thread,
                     text: message["text"].as_str().unwrap_or_default().to_owned(),
+                    files: Vec::new(),
                 }
             } else {
                 let reaction = &args["reaction"];

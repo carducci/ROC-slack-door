@@ -285,6 +285,7 @@ pub fn turtle(delivery: &Delivery) -> String {
             user,
             time,
             text,
+            files,
         } => {
             predicates.push("a slack:Message".to_owned());
             if let Some(key) = key {
@@ -293,6 +294,10 @@ pub fn turtle(delivery: &Delivery) -> String {
             predicates.push(format!("slack:user {}", literal(user)));
             predicates.push(format!("slack:time {}", literal(time)));
             predicates.push(format!("slack:text {}", literal(text)));
+            for file in files {
+                // Each file is a node of its own: a bare literal repeated is one triple in RDF.
+                predicates.push(format!("slack:file [ slack:entry {} ]", literal(file)));
+            }
         }
         Delivery::Reaction { key, user, name } => {
             predicates.push("a slack:Reaction".to_owned());
@@ -373,6 +378,7 @@ mod tests {
             user: user.to_owned(),
             time: "1.5".to_owned(),
             text: text.to_owned(),
+            files: Vec::new(),
         }
     }
 
@@ -388,6 +394,28 @@ mod tests {
         assert!(taken.contains("carducci-54") && taken.contains("U1") && taken.contains("hi"), "{taken}");
         let fixme = issue(&kernel, Verb::Source, "urn:slack:channel:fixme:inbox");
         assert!(fixme.map_or(true, |r| r.bytes.to_vec() != backing.as_bytes()));
+    }
+
+    #[test]
+    fn a_post_with_two_refused_files_still_has_two_entries_to_a_match() {
+        // Spec `files`: "one entry per file". The tuple is RDF, and a host reads it by a SPARQL
+        // match over its graph, where two equal `slack:file "files-not-accepted"` triples are
+        // one: a post with two screenshots would read as a post with one.
+        let (kernel, _) = two_channel_door("two-refused-files");
+        let mut post = a_message("carducci-54", "U1", "two shots");
+        if let Delivery::Message { files, .. } = &mut post {
+            *files = vec!["files-not-accepted".to_owned(), "files-not-accepted".to_owned()];
+        }
+        drop_delivery(&intray_of("two-refused-files"), "gonk-chat", &post).unwrap();
+        let two_files = "ASK { { SELECT (COUNT(*) AS ?n) WHERE { ?m <urn:slack:file> ?f } } \
+                         FILTER(?n = 2) }";
+        let request = Request::new(Verb::Delete, Iri::parse("urn:slack:channel:gonk-chat:inbox").unwrap())
+            .with_arg("match", ArgRef::Inline(two_files.as_bytes().to_vec()));
+        let taken = futures_executor::block_on(kernel.issue(request, &Capability::root()));
+        assert!(
+            taken.is_ok_and(|r| String::from_utf8_lossy(&r.bytes).contains("two shots")),
+            "a match for two file entries did not find the post with two files"
+        );
     }
 
     #[test]
@@ -861,6 +889,7 @@ mod tests {
             user: "U1".to_owned(),
             time: "2023-11-14T22:15:00Z".to_owned(),
             text: "Use \"the\" token".to_owned(),
+            files: Vec::new(),
         });
         assert!(tuple.contains("a slack:Message"));
         assert!(tuple.contains("slack:key \"carducci-54\""));
@@ -874,6 +903,7 @@ mod tests {
             user: "U1".to_owned(),
             time: "2023-11-14T22:15:00Z".to_owned(),
             text: "What's blocked today?".to_owned(),
+            files: Vec::new(),
         });
         assert!(!tuple.contains("slack:key"));
     }

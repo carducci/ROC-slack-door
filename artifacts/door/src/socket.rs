@@ -7,7 +7,7 @@ use std::sync::mpsc::Sender;
 use std::thread;
 use std::time::Duration;
 
-use roc_slack_door::Event;
+use roc_slack_door::{Event, SlackFile};
 use serde_json::{json, Value};
 use tungstenite::Message;
 
@@ -98,8 +98,12 @@ fn event_from(payload: &Value) -> Option<Event> {
     let text_of = |field: &str| event[field].as_str().map(str::to_owned);
     match event["type"].as_str()? {
         "message" => {
-            if event.get("subtype").is_some() {
-                return None;
+            // A message with files is `file_share`; every other subtype (edits, deletions) is dropped.
+            // A subtype that is present but null or not a string is still a subtype.
+            match event.get("subtype") {
+                None => {}
+                Some(subtype) if subtype.as_str() == Some("file_share") => {}
+                Some(_) => return None,
             }
             Some(Event::Message {
                 id,
@@ -108,6 +112,7 @@ fn event_from(payload: &Value) -> Option<Event> {
                 ts: text_of("ts")?,
                 thread: text_of("thread_ts"),
                 text: text_of("text").unwrap_or_default(),
+                files: files_of(event),
             })
         }
         "reaction_added" => Some(Event::Reaction {
@@ -119,6 +124,23 @@ fn event_from(payload: &Value) -> Option<Event> {
         }),
         _ => None,
     }
+}
+
+/// The files a message event carries, one entry per file. A file Slack cannot serve has no
+/// private URL and keeps an empty one, to be refused as `file-unavailable`; an unreported size
+/// is zero.
+fn files_of(event: &Value) -> Vec<SlackFile> {
+    let Some(files) = event["files"].as_array() else {
+        return Vec::new();
+    };
+    files
+        .iter()
+        .map(|file| SlackFile {
+            id: file["id"].as_str().unwrap_or_default().to_owned(),
+            size: file["size"].as_u64().unwrap_or(0),
+            url_private: file["url_private"].as_str().unwrap_or_default().to_owned(),
+        })
+        .collect()
 }
 
 #[cfg(test)]
@@ -152,6 +174,7 @@ mod tests {
                 ts: "1700000100.000001".to_owned(),
                 thread: Some("1700000000.000001".to_owned()),
                 text: "Which token?".to_owned(),
+                files: Vec::new(),
             })
         );
     }
@@ -164,6 +187,59 @@ mod tests {
         let edit = json!({ "event_id": "Ev3", "event": {
             "type": "message", "subtype": "message_changed", "channel": "C1", "ts": "1.0" } });
         assert_eq!(event_from(&edit), None);
+    }
+
+    #[test]
+    fn a_subtype_that_is_null_or_not_a_string_is_still_not_heard() {
+        for subtype in [Value::Null, json!(5), json!({ "name": "message_changed" })] {
+            let odd = json!({ "event_id": "Ev4", "event": {
+                "type": "message", "subtype": subtype, "channel": "C1", "user": "U1",
+                "ts": "1.0", "text": "x" } });
+            assert_eq!(event_from(&odd), None, "subtype {subtype} was heard");
+        }
+    }
+
+    #[test]
+    fn a_file_slack_cannot_serve_is_still_one_of_the_messages_files() {
+        // A deleted file is a tombstone with only an id; a file over a free plan's limit is
+        // `hidden_by_limit`. The spec wants one entry per file, refused as `file-unavailable`.
+        let payload = json!({ "event_id": "Ev5", "event": {
+            "type": "message", "subtype": "file_share", "channel": "C1", "user": "U1",
+            "ts": "1700000200.000100", "text": "two shots",
+            "files": [
+                { "id": "F1", "mode": "tombstone" },
+                { "id": "F2", "mode": "hidden_by_limit" },
+                { "id": "F3", "size": 10,
+                  "url_private": "https://files.slack.com/files-pri/T1-F3/a.png" }
+            ] } });
+        let Some(Event::Message { files, .. }) = event_from(&payload) else {
+            panic!("the file_share message was not heard");
+        };
+        assert_eq!(files.len(), 3, "a file was dropped without a trace: {files:?}");
+    }
+
+    #[test]
+    fn a_file_share_carries_each_files_id_size_and_private_url() {
+        let payload: Value = serde_json::from_str(include_str!("../fixtures/file_share.json"))
+            .expect("the recorded event is JSON");
+        assert_eq!(
+            event_from(&payload),
+            Some(Event::Message {
+                id: "Ev0FILE0001".to_owned(),
+                channel: "C0FIXME001".to_owned(),
+                user: "U0DAVID001".to_owned(),
+                ts: "1700000200.000100".to_owned(),
+                thread: None,
+                text: "cosmetic: the save button overlaps the footer".to_owned(),
+                files: vec![SlackFile {
+                    id: "F0SHOT0001".to_owned(),
+                    size: 48213,
+                    url_private:
+                        "https://files.slack.com/files-pri/T0TEAM001-F0SHOT0001/screenshot.png"
+                            .to_owned(),
+                }],
+            })
+        );
     }
 
     #[test]
