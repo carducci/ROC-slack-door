@@ -162,13 +162,15 @@ pub struct ChannelEndpoint<T: SlackTransport> {
     declared: Vec<String>,
     /// The id this binding is published under, and the resource `descriptions()` describes there.
     resource: (&'static str, &'static str),
+    /// The declared channel whose own address this binding is, when bound by its literal name.
+    channel: Option<String>,
 }
 
 #[async_trait]
 impl<T: SlackTransport + Send + 'static> Endpoint for ChannelEndpoint<T> {
     async fn invoke(&self, inv: &Invocation<'_>) -> Result<Representation> {
         let bound_rest = inv.bindings.get("rest");
-        let rest = bound_rest.or(inv.bindings.get("name")).unwrap_or_default();
+        let rest = bound_rest.or(self.channel.as_deref()).or(inv.bindings.get("name")).unwrap_or_default();
         let name = rest.split(':').next().unwrap_or_default();
         check_channel(&self.declared, name)
             .map_err(|refusal| to_error(ThreadError::Refused(refusal)))?;
@@ -178,7 +180,7 @@ impl<T: SlackTransport + Send + 'static> Endpoint for ChannelEndpoint<T> {
             threads.react_in(inv.capability, name, key, reaction, add).map_err(to_error)?;
             return Ok(ok_text(if add { "reacted" } else { "unreacted" }));
         }
-        if inv.request.verb == Verb::Sink && bound_rest.is_some_and(|rest| !rest.contains(':')) {
+        if inv.request.verb == Verb::Sink && !rest.contains(':') {
             let text = text_of(inv)?;
             self.threads
                 .lock()
@@ -198,8 +200,12 @@ impl<T: SlackTransport + Send + 'static> Endpoint for ChannelEndpoint<T> {
     }
 
     fn describe(&self) -> Description {
-        let (id, resource) = self.resource;
-        described(id, resource)
+        match self.resource {
+            ("", _) => Description::new("slack-channel-unserved")
+                .title("urn:slack:channel:{rest}")
+                .summary("Any other address under a declared channel; nothing is served there yet."),
+            (id, resource) => described(id, resource),
+        }
     }
 }
 
@@ -260,7 +266,21 @@ pub fn slack_space<T: SlackTransport + Send + 'static>(
         spaces: intray(root),
         declared: declared.clone(),
     };
-    EndpointSpace::new()
+    let mut space = EndpointSpace::new();
+    // A declared channel's own address is bound by its literal name: a `{name}` variable at the end
+    // would take the whole tail, and the Sink it describes would be claimed for every address below.
+    for channel in &declared {
+        space = space.bind(
+            UriTemplate::parse(&format!("urn:slack:channel:{channel}")).expect("a declared channel"),
+            ChannelEndpoint {
+                threads: Arc::clone(&threads),
+                declared: declared.clone(),
+                resource: ("slack-channel", "urn:slack:channel:{name}"),
+                channel: Some(channel.clone()),
+            },
+        );
+    }
+    space
         .bind(
             UriTemplate::parse("urn:slack:channel:{name}:thread:{key}:reaction:{reaction}")
                 .expect("a fixed template"),
@@ -271,6 +291,7 @@ pub fn slack_space<T: SlackTransport + Send + 'static>(
                     "slack-channel-reaction",
                     "urn:slack:channel:{name}:thread:{key}:reaction:{reaction}",
                 ),
+                channel: None,
             },
         )
         .bind(
@@ -289,7 +310,8 @@ pub fn slack_space<T: SlackTransport + Send + 'static>(
             ChannelEndpoint {
                 threads,
                 declared,
-                resource: ("slack-channel", "urn:slack:channel:{name}"),
+                resource: ("", ""),
+                channel: None,
             },
         )
 }
