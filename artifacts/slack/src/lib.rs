@@ -73,6 +73,15 @@ pub struct Message {
     pub text: String,
 }
 
+/// A file attached to a message, as Slack's event describes it. `size` is what Slack reports,
+/// which is not to be trusted; `url_private` needs the bot token.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct SlackFile {
+    pub id: String,
+    pub size: u64,
+    pub url_private: String,
+}
+
 /// Something a person did in the channel that the door hears about. `id` is Slack's id for the
 /// event; Slack repeats it when it redelivers the event.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -85,6 +94,8 @@ pub enum Event {
         ts: String,
         thread: Option<String>,
         text: String,
+        /// The files a `file_share` message carries; empty for a plain message.
+        files: Vec<SlackFile>,
     },
     /// A reaction added to the message at `message`.
     Reaction {
@@ -484,6 +495,7 @@ mod tests {
             ts: "1700000100.000001".to_owned(),
             thread: Some(root.clone()),
             text: "Which token?".to_owned(),
+            files: Vec::new(),
         });
         let messages = slack.replies("C1", &root).unwrap();
         assert_eq!(messages.len(), 2);

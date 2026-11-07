@@ -210,6 +210,7 @@ fn run_step(world: &mut World, step: &Value) -> Result<(), String> {
                     ts: format!("1700000{:03}.000001", 100 + n),
                     thread,
                     text: message["text"].as_str().unwrap_or_default().to_owned(),
+                    files: Vec::new(),
                 }
             } else {
                 let reaction = &args["reaction"];

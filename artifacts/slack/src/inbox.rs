@@ -255,6 +255,7 @@ mod tests {
             ts: "1700000100.000001".to_owned(),
             thread: thread.map(str::to_owned),
             text: text.to_owned(),
+            files: Vec::new(),
         }
     }
 
@@ -351,6 +352,7 @@ mod tests {
             ts: "1700000200.000001".to_owned(),
             thread: Some("1700000100.000001".to_owned()),
             text: "Also this".to_owned(),
+            files: Vec::new(),
         };
         let delivery = inbox(&dir).deliver(in_it, &mut threads).unwrap();
         assert!(matches!(
