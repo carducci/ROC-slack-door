@@ -189,6 +189,35 @@ mod tests {
     }
 
     #[test]
+    fn a_subtype_that_is_null_or_not_a_string_is_still_not_heard() {
+        for subtype in [Value::Null, json!(5), json!({ "name": "message_changed" })] {
+            let odd = json!({ "event_id": "Ev4", "event": {
+                "type": "message", "subtype": subtype, "channel": "C1", "user": "U1",
+                "ts": "1.0", "text": "x" } });
+            assert_eq!(event_from(&odd), None, "subtype {subtype} was heard");
+        }
+    }
+
+    #[test]
+    fn a_file_slack_cannot_serve_is_still_one_of_the_messages_files() {
+        // A deleted file is a tombstone with only an id; a file over a free plan's limit is
+        // `hidden_by_limit`. The spec wants one entry per file, refused as `file-unavailable`.
+        let payload = json!({ "event_id": "Ev5", "event": {
+            "type": "message", "subtype": "file_share", "channel": "C1", "user": "U1",
+            "ts": "1700000200.000100", "text": "two shots",
+            "files": [
+                { "id": "F1", "mode": "tombstone" },
+                { "id": "F2", "mode": "hidden_by_limit" },
+                { "id": "F3", "size": 10,
+                  "url_private": "https://files.slack.com/files-pri/T1-F3/a.png" }
+            ] } });
+        let Some(Event::Message { files, .. }) = event_from(&payload) else {
+            panic!("the file_share message was not heard");
+        };
+        assert_eq!(files.len(), 3, "a file was dropped without a trace: {files:?}");
+    }
+
+    #[test]
     fn a_file_share_carries_each_files_id_size_and_private_url() {
         let payload: Value = serde_json::from_str(include_str!("../fixtures/file_share.json"))
             .expect("the recorded event is JSON");
