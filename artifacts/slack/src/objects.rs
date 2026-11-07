@@ -10,8 +10,12 @@
 use std::fs;
 use std::io::{self, Write};
 use std::path::{Path, PathBuf};
+use std::sync::atomic::{AtomicU64, Ordering};
 
 use ikigai_core::ContentId;
+
+/// Counts the temporary names this process has made, so no two writers share one.
+static NEXT_TMP: AtomicU64 = AtomicU64::new(0);
 
 /// A write-once store of bytes by content.
 pub struct Objects {
@@ -44,10 +48,19 @@ impl Objects {
         }
         let dir = path.parent().expect("an object path has a parent");
         fs::create_dir_all(dir)?;
-        let tmp = dir.join(format!(".{}.tmp", std::process::id()));
+        // A name of this write's own: the process id, a counter shared by every writer in the
+        // process, and a retry on a name already taken (a leftover of an earlier run, whose
+        // process id and counter may repeat). `create_new` never follows or overwrites it.
+        let (tmp, mut file) = loop {
+            let n = NEXT_TMP.fetch_add(1, Ordering::Relaxed);
+            let tmp = dir.join(format!(".{}.{n}.tmp", std::process::id()));
+            match fs::OpenOptions::new().write(true).create_new(true).open(&tmp) {
+                Ok(file) => break (tmp, file),
+                Err(e) if e.kind() == io::ErrorKind::AlreadyExists => continue,
+                Err(e) => return Err(e),
+            }
+        };
         let written = (|| {
-            // `create_new`: never follow or overwrite whatever sits at the temporary name.
-            let mut file = fs::OpenOptions::new().write(true).create_new(true).open(&tmp)?;
             file.write_all(bytes)?;
             file.sync_all()?;
             fs::rename(&tmp, &path)
