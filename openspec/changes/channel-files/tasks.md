@@ -5,7 +5,7 @@ Waits for `channel-resources`: these names sit under `urn:slack:channel:{name}`.
 ## 1. Hearing files (`door`, `slack`)
 
 - [x] 1.1 Hear `file_share` messages, still dropping every other subtype, and carry each file's id, reported size and private URL into the inbox decision; add a recorded `file_share` event as a test fixture (A speaker's post with files lands in the inbox)
-- [ ] 1.2 Parse a channel's accepted types and size limit, refusing a start with a list but no limit or with a type `ikigai-sniff` can't detect (A channel lists the files it accepts)
+- [x] 1.2 Parse a channel's accepted types and size limit, refusing a start with a list but no limit or with a type `ikigai-sniff` can't detect (A channel lists the files it accepts)
 
 ## 2. The object store (`slack`)
 

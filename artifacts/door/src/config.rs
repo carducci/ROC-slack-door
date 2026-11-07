@@ -25,7 +25,15 @@ pub struct ChannelConfig {
     pub name: String,
     pub id: String,
     pub speakers: Vec<String>,
+    /// Media types the channel accepts as files; empty means it accepts none.
+    pub file_types: Vec<String>,
+    /// The most bytes one file may have; `Some` whenever `file_types` is not empty.
+    pub file_max_bytes: Option<u64>,
 }
+
+/// The media types the door can confirm from a file's bytes. This stands in for asking
+/// `ikigai-sniff`, which is not yet a dependency (see the draft PR's question).
+const SNIFFABLE: [&str; 4] = ["image/png", "image/jpeg", "image/gif", "image/webp"];
 
 /// Everything the door needs from its host.
 #[derive(Clone)]
@@ -149,7 +157,28 @@ impl Config {
             if speakers.is_empty() {
                 problems.push(format!("channel {name} has no speakers: set {prefix}_SPEAKERS"));
             }
-            channels.push(ChannelConfig { name, id, speakers });
+            let file_types: Vec<String> = value(&format!("{prefix}_FILE_TYPES"))
+                .unwrap_or_default()
+                .split(',')
+                .map(|t| t.trim().to_ascii_lowercase())
+                .filter(|t| !t.is_empty())
+                .collect();
+            for t in file_types.iter().filter(|t| !SNIFFABLE.contains(&t.as_str())) {
+                problems.push(format!(
+                    "channel {name} lists file type {t:?}, which ikigai-sniff can't detect: fix {prefix}_FILE_TYPES"
+                ));
+            }
+            let limit_key = format!("{prefix}_FILE_MAX_BYTES");
+            let limit = value(&limit_key);
+            let file_max_bytes = limit.as_deref().and_then(|v| v.trim().parse::<u64>().ok()).filter(|n| *n > 0);
+            if limit.is_some() && file_max_bytes.is_none() {
+                problems.push(format!(
+                    "channel {name} has a file size limit that is not a positive number of bytes: fix {limit_key}"
+                ));
+            } else if !file_types.is_empty() && limit.is_none() {
+                problems.push(format!("channel {name} lists file types but no size limit: set {limit_key}"));
+            }
+            channels.push(ChannelConfig { name, id, speakers, file_types, file_max_bytes });
         }
         if !problems.is_empty() {
             return Err(Refused(problems));
@@ -193,8 +222,8 @@ mod tests {
     fn a_good_two_channel_configuration_resolves() {
         let config = Config::resolve(&file_with(""), no_env).unwrap();
         let expected = vec![
-            ChannelConfig { name: "gonk-chat".into(), id: "C1".into(), speakers: vec!["U1".into(), "U3".into()] },
-            ChannelConfig { name: "fixme".into(), id: "C2".into(), speakers: vec!["U2".into()] },
+            ChannelConfig { name: "gonk-chat".into(), id: "C1".into(), speakers: vec!["U1".into(), "U3".into()], file_types: vec![], file_max_bytes: None },
+            ChannelConfig { name: "fixme".into(), id: "C2".into(), speakers: vec!["U2".into()], file_types: vec![], file_max_bytes: None },
         ];
         assert_eq!(config.channels, expected);
         assert_eq!(config.bot_token, "xoxb-file");
@@ -322,6 +351,38 @@ mod tests {
     fn every_problem_is_named_not_just_the_first() {
         let problems = refused(&BTreeMap::new());
         assert_eq!(problems.len(), 4, "{problems:?}");
+    }
+
+    const IMAGES: &str = "SLACK_CHANNEL_FIXME_FILE_TYPES=image/png, image/jpeg,image/gif,image/webp\n";
+
+    #[test]
+    fn a_channel_lists_its_file_types_and_limit() {
+        let file = file_with(&format!("{IMAGES}SLACK_CHANNEL_FIXME_FILE_MAX_BYTES=10485760\n"));
+        let config = Config::resolve(&file, no_env).unwrap();
+        assert_eq!(config.channels[1].file_types.len(), 4);
+        assert_eq!(config.channels[1].file_max_bytes, Some(10_485_760));
+        assert!(config.channels[0].file_types.is_empty());
+    }
+
+    #[test]
+    fn a_list_with_no_limit_stops_the_start_naming_the_channel() {
+        let problem = only(refused(&file_with(IMAGES)));
+        assert_eq!(problem, "channel fixme lists file types but no size limit: set SLACK_CHANNEL_FIXME_FILE_MAX_BYTES");
+    }
+
+    #[test]
+    fn a_bad_limit_stops_the_start() {
+        for bad in ["0", "10MB", "-1"] {
+            let problem = only(refused(&file_with(&format!("{IMAGES}SLACK_CHANNEL_FIXME_FILE_MAX_BYTES={bad}\n"))));
+            assert!(problem.contains("fixme") && problem.contains("positive number"), "{problem}");
+        }
+    }
+
+    #[test]
+    fn a_type_that_cannot_be_detected_stops_the_start_naming_it() {
+        let file = file_with("SLACK_CHANNEL_FIXME_FILE_TYPES=image/png,text/html\nSLACK_CHANNEL_FIXME_FILE_MAX_BYTES=5\n");
+        let problem = only(refused(&file));
+        assert!(problem.contains("text/html") && problem.contains("fixme"), "{problem}");
     }
 
     #[test]
