@@ -593,6 +593,23 @@ class GuideTextTest(unittest.TestCase):
         unquoted = [g for g, c in self.comments().items() if not re.search(r"`[^`\n]+`", c)]
         self.assertEqual([], unquoted)
 
+    # A quote is a substring of the cited section's raw Markdown source (ikigai-slack#222).
+
+    def test_a_quote_is_a_substring_of_the_sections_raw_source(self) -> None:
+        self.edit(
+            "AGENTS.md",
+            r"^- \*\*No claim, no write\.\*\*",
+            "- **No claim, no write.** Read [the loop](#the-loop).",
+        )
+        self.guide("claim-before-write", "`**No claim, no write.** Read [the loop](#the-loop).`")
+        self.assertEqual([], harness.check(self.repo))
+        # What a reader sees is not the source, so it is not a quote of it.
+        self.guide("claim-before-write", "`No claim, no write. Read the loop.`")
+        self.assertEqual(1, len(self.problems("claim-before-write")))
+        # Whitespace runs are collapsed, on both sides.
+        self.guide("claim-before-write", "`**No claim, no write.**   Read [the loop](#the-loop).`")
+        self.assertEqual([], harness.check(self.repo))
+
     # A quote must be in the section the guide cites, not merely somewhere in the file.
 
     def test_a_quote_from_another_section_fails(self) -> None:
@@ -613,181 +630,6 @@ class GuideTextTest(unittest.TestCase):
         self.edit("AGENTS.md", r"`Supersedes PR #N`\.$", "`Supersedes PR\n   #N`.")
         self.assertEqual([], harness.check(self.repo))
 
-    def test_the_headings_words_are_in_its_section(self) -> None:
-        # P3 of ikigai-slack#188.
-        self.guide("no-bare-numbers", "`Never a bare #N`: write `PR #N` for a pull request.")
-        self.assertEqual([], harness.check(self.repo))
-
-    def test_a_fenced_line_is_not_a_heading(self) -> None:
-        # p8 of ikigai-slack#188.
-        self.edit(
-            "AGENTS.md",
-            r"^(?=1\. Open your pull request as a draft)",
-            "```sh\n## not a heading\n```\n\n",
-        )
-        self.assertEqual([], harness.check(self.repo))
-
-    def test_a_line_opening_with_a_backtick_code_span_opens_no_fence(self) -> None:
-        # ikigai-slack#198: CommonMark 4.5, a backtick fence's info string holds no backtick.
-        self.edit(
-            "AGENTS.md",
-            r"^(?=1\. Open your pull request as a draft)",
-            "``` `#N` ``` is how a code span holds backticks.\n\n",
-        )
-        self.assertEqual([], harness.check(self.repo))
-
-    def test_a_fence_closes_only_on_its_own_character_at_least_as_long(self) -> None:
-        # ikigai-slack#198: a shorter run, or the other character, leaves the fence open.
-        self.edit(
-            "AGENTS.md",
-            r"^(?=1\. Open your pull request as a draft)",
-            "````\n```\n~~~~\n## not a heading\n`````\n\n",
-        )
-        self.assertEqual([], harness.check(self.repo))
-
-    def test_emphasis_and_links_read_as_their_words(self) -> None:
-        self.edit(
-            "AGENTS.md",
-            r"^- \*\*No claim, no write\.\*\*",
-            "- **No claim, no write.** Read [the loop](#the-loop).",
-        )
-        self.guide("claim-before-write", "`No claim, no write. Read the loop.`")
-        self.assertEqual([], harness.check(self.repo))
-
-    def test_inline_markdown_reads_as_its_words(self) -> None:
-        # ikigai-slack#199: each form AGENTS.md might use, read as a reader sees it.
-        for markdown, words in [
-            ("*Really* never.", "Really never."),
-            ("_Really_ never.", "Really never."),
-            ("***Really*** never.", "Really never."),
-            ("__Really__ never.", "Really never."),
-            ("**a *b* c** d", "a b c d"),
-            ("See [the loop](#the-loop \"t\").", "See the loop."),
-            ("See [the loop](#the-loop 't').", "See the loop."),
-            ("See [the loop](<#the loop> (t)).", "See the loop."),
-            ("See ![the loop](loop.png \"t\").", "See the loop."),
-            ("2\\*3 never.", "2*3 never."),
-            ("\\*not emphasis\\*", "*not emphasis*"),
-            ("\\`not code\\`", "`not code`"),
-            ("a\\\nb", "a b"),
-            ("&amp; &lt;b&gt; &#42;x&#42; &#x2A; &copy;", "& <b> *x* * ©"),
-            ("&nosuch; &amp", "&nosuch; &amp"),
-            ("<mailto:a@b.c> <https://x.y/z>", "mailto:a@b.c https://x.y/z"),
-            ("`a\\*b` `&amp;` `*c*`", "a\\*b &amp; *c*"),
-            ("snake_case_name and 2 * 3 and a*b", "snake_case_name and 2 * 3 and a*b"),
-            ("*see `x` here*", "see x here"),
-        ]:
-            with self.subTest(markdown=markdown):
-                self.assertEqual(words, harness.flat(harness.inline(markdown)))
-
-    def test_emphasis_titles_escapes_and_entities_in_agents_md_match(self) -> None:
-        # The four reproductions of ikigai-slack#199, through the check.
-        for added, quote in [
-            ("*Really* never.", "No claim, no write. Really never."),
-            ("_Really_ never.", "No claim, no write. Really never."),
-            ('See [the loop](#the-loop "t").', "No claim, no write. See the loop."),
-            ("2\\*3 never.", "No claim, no write. 2*3 never."),
-            ("&amp; never.", "No claim, no write. & never."),
-        ]:
-            with self.subTest(added=added):
-                shutil.copy(ROOT / "AGENTS.md", self.repo / "AGENTS.md")
-                self.restore()
-                self.edit(
-                    "AGENTS.md",
-                    r"^- \*\*No claim, no write\.\*\*",
-                    f"- **No claim, no write.** {added}",
-                )
-                self.guide("claim-before-write", f"`{quote}`")
-                self.assertEqual([], harness.check(self.repo))
-
-    def test_an_autolink_is_its_address_read_as_nothing_else(self) -> None:
-        # ikigai-slack#202: no emphasis and no backslash escape inside an autolink (CommonMark 6.5).
-        for markdown, words in [
-            ("<https://x.y/_a_>", "https://x.y/_a_"),
-            ("<https://x.y/*a*>", "https://x.y/*a*"),
-            ("<https://x/\\_a\\_>", "https://x/\\_a\\_"),
-            ("*a <https://x.y/*b> c*", "a https://x.y/*b c"),
-            ("<a_b_@c.d>", "a_b_@c.d"),
-        ]:
-            with self.subTest(markdown=markdown):
-                self.assertEqual(words, harness.flat(harness.inline(markdown)))
-        self.edit(
-            "AGENTS.md",
-            r"^- \*\*No claim, no write\.\*\*",
-            "- **No claim, no write.** See <https://x.y/_a_>.",
-        )
-        self.guide("claim-before-write", "`No claim, no write. See https://x.y/_a_.`")
-        self.assertEqual([], harness.check(self.repo))
-
-    def test_a_private_use_character_reads_as_itself(self) -> None:
-        # ikigai-slack#203: a plane-15 character neither crashes the check nor reads as code.
-        for char in ("\U000f0fff", "\U000f0000"):
-            with self.subTest(char=hex(ord(char))):
-                self.assertEqual(f"x {char} y c", harness.flat(harness.inline(f"x {char} y `c`")))
-                shutil.copy(ROOT / "AGENTS.md", self.repo / "AGENTS.md")
-                self.edit(
-                    "AGENTS.md",
-                    r"^(?=1\. Open your pull request as a draft)",
-                    f"x {char} y\n\n",
-                )
-                self.assertEqual([], harness.check(self.repo))
-                section = harness.read_sections(self.repo / "AGENTS.md")["Ask Dax, don't guess"]
-                self.assertIn(f"x {char} y", section.body)
-
-    def test_unequal_delimiter_runs_and_balanced_parentheses_read_as_commonmark(self) -> None:
-        # ikigai-slack#204: CommonMark 6.2's delimiter runs, and 6.3's link destinations.
-        for markdown, words in [
-            ("**Really* never.", "*Really never."),
-            ("*Really** never.", "Really* never."),
-            ("*foo**bar**baz*", "foobarbaz"),
-            ("*foo**bar*", "foo**bar"),
-            ("***strong emph***", "strong emph"),
-            ("**foo*bar*baz**", "foobarbaz"),
-            ("*(*foo*)*", "(foo)"),
-            ("foo*bar*", "foobar"),
-            ("foo_bar_", "foo_bar_"),
-            ("_foo_bar_baz_", "foo_bar_baz"),
-            ("a * b * c", "a * b * c"),
-            ("*a `*`*", "a *"),
-            ("See [the loop](x(y)).", "See the loop."),
-            ("[link](foo(and(bar)))", "link"),
-            ("[link](foo(and(bar))", "[link](foo(and(bar))"),
-            ("[link](foo\\)bar)", "link"),
-            ("[link]()", "link"),
-            ("[link](<a b> \"t\")", "link"),
-            ("[*a*](b)*", "a*"),
-            ("[a [b](c) d](e)", "[a b d](e)"),
-            ("[a `]` b](c)", "a ] b"),
-            ("[a] b", "[a] b"),
-            ("*a\n\nb*", "*a b*"),
-            ("`a\n\nb`", "`a b`"),
-        ]:
-            with self.subTest(markdown=markdown):
-                self.assertEqual(words, harness.flat(harness.inline(markdown)))
-        for added, quote in [
-            ("**Really* never.", "No claim, no write. *Really never."),
-            ("See [the loop](x(y)).", "No claim, no write. See the loop."),
-        ]:
-            with self.subTest(added=added):
-                shutil.copy(ROOT / "AGENTS.md", self.repo / "AGENTS.md")
-                self.restore()
-                self.edit(
-                    "AGENTS.md",
-                    r"^- \*\*No claim, no write\.\*\*",
-                    f"- **No claim, no write.** {added}",
-                )
-                self.guide("claim-before-write", f"`{quote}`")
-                self.assertEqual([], harness.check(self.repo))
-
-    def test_entities_are_the_named_or_numbered_character_or_their_text(self) -> None:
-        for markdown, words in [
-            ("&ampx; &amp;", "&ampx; &"),
-            ("&#0; &#x110000;", "� �"),
-            ("&#42;a&#42;", "*a*"),
-        ]:
-            with self.subTest(markdown=markdown):
-                self.assertEqual(words, harness.flat(harness.inline(markdown)))
-
     def test_a_quote_spanning_the_heading_and_the_body_says_so(self) -> None:
         # ikigai-slack#205: a quote no reader sees, refused with a sentence true for it.
         self.guide("reproduce-before-fix", "`Reproduce before you fix A bug report`")
@@ -800,111 +642,19 @@ class GuideTextTest(unittest.TestCase):
             harness.check(self.repo),
         )
 
-    def test_a_form_the_check_does_not_read_is_named_when_a_quote_is_not_found(self) -> None:
-        # Raw HTML, a link reference definition and a setext underline are not read, so a quote
-        # the check can't find there is not called one the section does not say.
-        for added, clause in [
-            ("<b>Really</b> never.", "the section has raw HTML"),
-            ("[Really][r] never.\n\n[r]: https://x.y", "the file has a link reference definition"),
-            ("Really\n===\nnever.", "the section has a line of only `=` or `-` under a line of text"),
-        ]:
-            with self.subTest(added=added):
-                shutil.copy(ROOT / "AGENTS.md", self.repo / "AGENTS.md")
-                self.restore()
-                self.edit("AGENTS.md", r"^(?=1\. Open your pull request as a draft)", f"{added}\n\n")
-                self.guide("ask-dax-dont-guess", "`Really never.` `Never mark it ready for review.`")
-                self.assertEqual(
-                    [
-                        f"{GUIDES}ask-dax-dont-guess: quotes `Really never.`, which the check "
-                        f"can't find in AGENTS.md `## Ask Dax, don't guess`: {clause}, "
-                        "which the check does not read"
-                    ],
-                    self.problems("ask-dax-dont-guess"),
-                )
-
-    def test_an_image_may_hold_a_link(self) -> None:
-        # ikigai-slack#217: a link deactivates only the `[` openers before it, not `![`
-        # (CommonMark 6.3), so an image's text may hold a link.
-        for markdown, words in [
-            ("![a [b](c)](d)", "a b"),
-            ("![[[foo](uri1)](uri2)](uri3)", "[foo](uri2)"),
-            ("[a ![b](c) d](e)", "a b d"),
-        ]:
-            with self.subTest(markdown=markdown):
-                self.assertEqual(words, harness.flat(harness.inline(markdown)))
-        self.edit(
-            "AGENTS.md",
-            r"^- \*\*No claim, no write\.\*\*",
-            "- **No claim, no write.** See ![a [b](c)](d).",
-        )
-        self.guide("claim-before-write", "`No claim, no write. See a b.`")
-        self.assertEqual([], harness.check(self.repo))
-
-    def test_a_block_form_the_check_does_not_read_is_named(self) -> None:
-        # ikigai-slack#218: an indented code block or a block quote is named, not misread.
-        for added, quote, clause in [
-            ("    *Really* never.", "*Really* never.", "the section has an indented code block"),
-            ("\t*Really* never.", "*Really* never.", "the section has an indented code block"),
-            ("> Really\n> never.", "Really never.", "the section has a block quote"),
-            ("- a\n\n      *Really* never.", "*Really* never.", "the section has an indented code block"),
-            ("-     *Really* never.", "*Really* never.", "the section has an indented code block"),
-            ("- > Really\n  > never.", "Really never.", "the section has a block quote"),
+    def test_a_quote_is_not_read_through_markdown(self) -> None:
+        # Raw HTML, a setext underline and a reference definition are source like any other.
+        for added, quote in [
+            ("<b>Really</b> never.", "<b>Really</b> never."),
+            ("[Really][r] never.\n\n[r]: https://x.y", "[Really][r] never."),
+            ("*Really* never.", "*Really* never."),
         ]:
             with self.subTest(added=added):
                 shutil.copy(ROOT / "AGENTS.md", self.repo / "AGENTS.md")
                 self.restore()
                 self.edit("AGENTS.md", r"^(?=1\. Open your pull request as a draft)", f"{added}\n\n")
                 self.guide("ask-dax-dont-guess", f"`{quote}` `Never mark it ready for review.`")
-                self.assertEqual(
-                    [
-                        f"{GUIDES}ask-dax-dont-guess: quotes `{quote}`, which the check "
-                        f"can't find in AGENTS.md `## Ask Dax, don't guess`: {clause}, "
-                        "which the check does not read"
-                    ],
-                    self.problems("ask-dax-dont-guess"),
-                )
-
-    def test_block_forms_the_check_reads_are_read_as_commonmark_does(self) -> None:
-        # ikigai-slack#218: every other block form is read, each as a reader sees it.
-        for added, words in [
-            # A list item ends the paragraph before it; a line indented to an item's text
-            # after a blank line is a paragraph of the item, not code; a marker is its text.
-            ("- *Really\n- never.*", "- *Really - never.*"),
-            ("- a\n\n  *Really* never.", "- a Really never."),
-            ("1. a\n2. *Really\n3. never.*", "1. a 2. *Really 3. never.*"),
-            # A list starting at 2 does not interrupt a paragraph, so its line continues it.
-            ("*Really\n2. never.*", "Really 2. never."),
-            # A thematic break ends a paragraph and shows no words.
-            ("*Really\n***\nnever.*", "*Really never.*"),
-            ("*Really\n- - -\nnever.*", "*Really never.*"),
-            # An ATX heading in a section is its words, closing #s dropped, a block of its own.
-            ("### *Really ###\nnever.*", "*Really never.*"),
-            ("- ## *Really*\n\nnever.", "- Really never."),
-            # A fence in a list item closes at the item's indentation.
-            ("- ```\n  *Really*\n  ```\n\nnever.", "- *Really* never."),
-        ]:
-            with self.subTest(added=added):
-                shutil.copy(ROOT / "AGENTS.md", self.repo / "AGENTS.md")
-                self.edit("AGENTS.md", r"^(?=1\. Open your pull request as a draft)", f"{added}\n\n")
-                section = harness.read_sections(self.repo / "AGENTS.md")["Ask Dax, don't guess"]
-                self.assertIn(f"this file settles. {words} 1. Open", section.body)
-                self.assertEqual((), section.unread)
-
-    def test_a_heading_inside_another_block_opens_no_section(self) -> None:
-        # ikigai-slack#218: `## ` opens a section only as a top-level ATX heading, and an
-        # HTML block runs to its end, a `## ` line inside it included (CommonMark 4.6).
-        for added in ["<div>\n## Really\n</div>", "<!--\n\n## Really\n\n-->", "- a\n\n  ## Really"]:
-            with self.subTest(added=added):
-                shutil.copy(ROOT / "AGENTS.md", self.repo / "AGENTS.md")
-                self.edit("AGENTS.md", r"^(?=1\. Open your pull request as a draft)", f"{added}\n\n")
                 self.assertEqual([], harness.check(self.repo))
-                self.assertNotIn("Really", harness.read_sections(self.repo / "AGENTS.md"))
-        # A top-level one does, however it is written: indented, by a tab, or closed by #s.
-        for heading in [" ## Really ##", "##\tReally", "## Really #"]:
-            with self.subTest(heading=heading):
-                shutil.copy(ROOT / "AGENTS.md", self.repo / "AGENTS.md")
-                self.edit("AGENTS.md", r"^(?=1\. Open your pull request as a draft)", f"{heading}\n\n")
-                self.assertIn("Really", harness.read_sections(self.repo / "AGENTS.md"))
 
     # statedIn is a file inside this repository, compared by what it resolves to.
 

@@ -56,9 +56,6 @@ import argparse
 import ast
 import errno
 import hashlib
-import html
-import html.entities
-import itertools
 import os
 import posixpath
 import re
@@ -66,7 +63,6 @@ import secrets
 import stat
 import sys
 import time
-import unicodedata
 from dataclasses import dataclass, field
 from pathlib import Path
 
@@ -899,12 +895,6 @@ def check(repo: Path) -> list[str]:
                             f"of {where} into its body; quote, in backticks, a phrase of one or "
                             "the other"
                         )
-                    elif said.unread:
-                        bad.append(
-                            f"{s.value}: quotes {code_span(quote)}, which the check can't find "
-                            f"in {where}: {' and '.join(said.unread)}, which the check does "
-                            "not read"
-                        )
                     else:
                         bad.append(f"{s.value}: quotes {code_span(quote)}, which {where} does not")
                 # The heading's words may be quoted, but only a quote of the body holds the
@@ -981,47 +971,17 @@ def repo_file(root: Path, name: str) -> tuple[Path | None, str]:
     return path, ""
 
 
-# A fence opens with three or more of one character; a backtick fence's info string holds no
-# backtick (CommonMark 4.5), so a line opening with a ``` code span opens none.
-FENCE = re.compile(r" {0,3}(`{3,}(?=[^`]*$)|~{3,})")
-# A link reference definition opens a paragraph (CommonMark 4.7); a setext underline ends one.
-DEFINITION = re.compile(r" {0,3}\[(?:[^\]\\]|\\.)+\]:")
-SETEXT = re.compile(r" {0,3}(?:=+|-+)[ \t]*$")
-# The other block forms of CommonMark 4 and 5, each matched where a block may start.
-THEMATIC = re.compile(r" {0,3}([-*_])(?:[ \t]*\1){2,}[ \t]*$")
-ATX = re.compile(r" {0,3}(#{1,6})(?:[ \t]+(.*?))??(?:[ \t]+#+)?[ \t]*$")
-LIST_ITEM = re.compile(r" {0,3}([-+*]|([0-9]{1,9})[.)])(?= |$)")
-BLOCK_QUOTE = re.compile(r" {0,3}>")
-_BLOCK_TAGS = (
-    "address|article|aside|base|basefont|blockquote|body|caption|center|col|colgroup|dd|details"
-    "|dialog|dir|div|dl|dt|fieldset|figcaption|figure|footer|form|frame|frameset|h[1-6]|head"
-    "|header|hr|html|iframe|legend|li|link|main|menu|menuitem|nav|noframes|ol|optgroup|option|p"
-    "|param|search|section|summary|table|tbody|td|tfoot|th|thead|title|tr|track|ul"
-)
-# An HTML block's start conditions 1 to 7 (CommonMark 4.6), each with the line that ends it:
-# a pattern in a line, or (None) a blank line. The seventh may not interrupt a paragraph.
-HTML_BLOCKS = [
-    (re.compile(r" {0,3}<(?:pre|script|style|textarea)(?:[ \t>]|$)", re.I),
-     re.compile(r"</(?:pre|script|style|textarea)>", re.I)),
-    (re.compile(r" {0,3}<!--"), re.compile(r"-->")),
-    (re.compile(r" {0,3}<\?"), re.compile(r"\?>")),
-    (re.compile(r" {0,3}<![A-Za-z]"), re.compile(r">")),
-    (re.compile(r" {0,3}<!\[CDATA\["), re.compile(r"\]\]>")),
-    (re.compile(rf" {{0,3}}</?(?:{_BLOCK_TAGS})(?:[ \t>]|/>|$)", re.I), None),
-]
-
-
 @dataclass(frozen=True)
 class Section:
-    """A `## ` section as read_sections reads it (`flat`): its heading's words, and its body's."""
+    """A `## ` section of a Markdown file as written: its heading's source, and its body's,
+    each with every run of white space collapsed to one space (`flat`)."""
 
     heading: str
     body: str
-    unread: tuple[str, ...] = ()  # the forms in it that the check does not read, as clauses
 
     def says(self, words: str) -> bool:
-        """The words are in the section's heading, or in its body: a phrase running from one
-        into the other is not one a reader sees."""
+        """The words are a substring of the section's heading source, or of its body source: a
+        phrase running from one into the other is not one the section has."""
         return words in self.heading or words in self.body
 
     def spans(self, words: str) -> bool:
@@ -1030,431 +990,27 @@ class Section:
 
 
 def read_sections(path: Path) -> dict[str, Section] | str:
-    """The `## ` sections of a Markdown file, by heading, each read as its words; or why the
+    """The `## ` sections of a Markdown file, by heading, each as its raw source; or why the
     file can't be read.
 
-    The file is split into blocks as CommonMark 0.31.2 (chapters 4 and 5) does, a tab
-    stopping every four columns, and each of its block forms is read or named:
-
-    - a paragraph is read by `inline`, and every run of white space in it, a line ending in a
-      code span included (CommonMark 6.1), as one space; a blank line ends it;
-    - an ATX heading of level 2 outside every list item opens a section, its closing `#`s
-      dropped; any other ATX heading is its words, a block of the section it is in;
-    - a thematic break shows no words, and ends a paragraph;
-    - a fenced code block is its lines as written, never a heading; in a list item it closes
-      at the item's indentation, or where the item ends;
-    - a list item is its marker, kept as written, then its text read as blocks; an item ends
-      the paragraph before it (only a bullet, or a list starting at 1, with text after the
-      marker may), and a line indented to an item's text belongs to the item;
-    - an HTML block is its lines as written, to the line that ends it, never a heading.
-
-    A section notes the forms it holds that are not read: raw HTML (an HTML block, or raw
-    HTML inline), a line of only `=` or `-` under a line of text (it may make a setext
-    heading, which this function never takes for one), an indented code block (read here as
-    a paragraph), a block quote (its `>` markers kept as text), and, in every section, the
-    file's link reference definitions (a reference link is not resolved)."""
+    No Markdown is read (ikigai-slack#222): a line starting `## ` opens a section, named by the
+    rest of that line as written, and the lines up to the next such line are its body, as
+    written. The only normalisation is `flat`: every run of white space is one space, so a
+    quote may be wrapped differently from its source."""
     try:
         text = path.read_text(encoding="utf-8")
     except UnicodeDecodeError:
         return "is not UTF-8 text"
     except OSError as e:
         return f"can't be read ({e.strerror})"
-    sections: dict[str, tuple[str, list[str], set[str]]] = {}
+    sections: dict[str, list[str]] = {}
     lines: list[str] | None = None
-    unread: set[str] = set()
-    prose: list[str] = []
-    items: list[int] = []  # the column each open list item's text starts at, outermost first
-    fence, fence_base = "", 0
-    html_end: re.Pattern[str] | None = None  # the line ending an open HTML block; None: a blank
-    html_open, html_base = False, 0
-    paragraph = False  # a paragraph is open, so a line may continue it
-    defines = False
-
-    def close_prose() -> None:
-        if lines is not None and prose:
-            lines.append(inline("\n".join(prose), unread))
-        prose.clear()
-
-    def keep(words: str) -> None:
-        if lines is not None and words:
-            lines.append(words)
-
-    for raw in text.splitlines():
-        line = raw.expandtabs(4)
-        indent = len(line) - len(line.lstrip(" "))
-        blank = not line.strip()
-        if fence and not blank and indent < fence_base:
-            fence = ""  # the list item holding the fence has ended
-        if fence:
-            m = FENCE.match(line[fence_base:])
-            if m and m.group(1)[0] == fence[0] and len(m.group(1)) >= len(fence):
-                if not line[fence_base + m.end() :].strip():
-                    fence = ""
-                    continue
-            keep(raw)
-            continue
-        if html_open and not blank and indent < html_base:
-            html_open = False
-        if html_open:
-            if html_end is None:
-                html_open = not blank
-            else:
-                html_open = not html_end.search(raw)
-            if not blank:
-                keep(raw)
-                continue
-        if blank:
-            close_prose()
-            paragraph = False
-            continue
-        inner = list(itertools.takewhile(lambda col: col <= indent, items))
-        matched = len(inner) == len(items)
-        markers: list[str] = []
-        base = inner[-1] if inner else 0
-        while True:
-            rest = line[base:]
-            further = not markers and paragraph  # the line may continue the open paragraph
-            if len(rest) - len(rest.lstrip(" ")) >= 4:
-                if not further:
-                    close_prose()
-                    unread.add("indented code")
-                    items = inner
-                prose.append(" ".join(markers + [rest]))
-                paragraph = further
-                break
-            if further and SETEXT.match(rest):
-                unread.add("setext")
-                prose.append(raw)
-                break
-            if m := FENCE.match(rest):
-                close_prose()
-                keep(" ".join(markers))
-                fence, fence_base, items, paragraph = m.group(1), base, inner, False
-                break
-            if m := ATX.match(rest):
-                close_prose()
-                if len(m.group(1)) == 2 and base == 0:
-                    heading = m.group(2) or ""
-                    if heading not in sections:
-                        found: set[str] = set()
-                        sections[heading] = (inline(heading, found), [], found)
-                    _, lines, unread = sections[heading]
-                    items = []
-                else:
-                    keep(inline(" ".join(markers + [m.group(2) or ""]), unread))
-                    items = inner
-                paragraph = False
-                break
-            if THEMATIC.match(rest):
-                close_prose()
-                keep(" ".join(markers))
-                items, paragraph = inner, False
-                break
-            if BLOCK_QUOTE.match(rest):
-                close_prose()
-                unread.add("block quote")
-                prose.append(" ".join(markers + [rest]))
-                items, paragraph = inner, True
-                break
-            starts = [end for start, end in HTML_BLOCKS if start.match(rest)]
-            if starts or (not further and HTML_BLOCK_7.match(rest)):
-                close_prose()
-                unread.add("raw HTML")
-                keep(" ".join(markers + [rest]))
-                html_end = starts[0] if starts else None
-                html_open = html_end is None or not html_end.search(rest)
-                items, html_base, paragraph = inner, base, False
-                break
-            m = LIST_ITEM.match(rest)
-            after = rest[m.end() :] if m else ""
-            if m and further and matched and (not after.strip() or m.group(2) not in (None, "1")):
-                m = None  # this list item may not interrupt a paragraph (CommonMark 5.2)
-            if m:
-                close_prose()
-                spaces = len(after) - len(after.lstrip(" "))
-                width = 1 if not after.strip() or spaces > 4 else spaces
-                markers.append(m.group(1))
-                base += m.end() + width
-                inner = inner + [base]
-                if not after.strip():
-                    prose.append(" ".join(markers))
-                    items, paragraph = inner, False
-                    break
-                continue
-            if further:
-                prose.append(raw)  # a paragraph continuation, lazy or not: the items stay open
-                break
-            if DEFINITION.match(rest):
-                defines = True
-            prose.append(" ".join(markers + [rest]))
-            items, paragraph = inner, True
-            break
-    close_prose()
-    clauses = {
-        "raw HTML": "the section has raw HTML",
-        "setext": "the section has a line of only `=` or `-` under a line of text",
-        "indented code": "the section has an indented code block",
-        "block quote": "the section has a block quote",
-    }
-    return {
-        h: Section(
-            flat(words),
-            flat(" ".join(body)),
-            tuple(clauses[form] for form in clauses if form in found)
-            + (("the file has a link reference definition",) if defines else ()),
-        )
-        for h, (words, body, found) in sections.items()
-    }
-
-
-# CommonMark's inline forms (spec 0.31.2, chapter 6), as `inline` reads them.
-PUNCTUATION = set("!\"#$%&'()*+,-./:;<=>?@[\\]^_`{|}~")
-AUTOLINK = re.compile(
-    r"<([A-Za-z][A-Za-z0-9+.-]{1,31}:[^<>\x00-\x20]*"
-    r"|[A-Za-z0-9.!#$%&'*+/=?^_`{|}~-]+@[A-Za-z0-9](?:[A-Za-z0-9-]{0,61}[A-Za-z0-9])?"
-    r"(?:\.[A-Za-z0-9](?:[A-Za-z0-9-]{0,61}[A-Za-z0-9])?)*)>"
-)
-_ATTRIBUTE = r"""\s+[A-Za-z_:][A-Za-z0-9_.:-]*(?:\s*=\s*(?:[^\s"'=<>`]+|'[^']*'|"[^"]*"))?"""
-RAW_HTML = re.compile(
-    rf"<[A-Za-z][A-Za-z0-9-]*(?:{_ATTRIBUTE})*\s*/?>|</[A-Za-z][A-Za-z0-9-]*\s*>"
-    r"|<!-->|<!--->|<!--.*?-->|<\?.*?\?>|<![A-Za-z][^>]*>|<!\[CDATA\[.*?\]\]>",
-    re.S,
-)
-# HTML block condition 7: a whole open or closing tag alone on its line (CommonMark 4.6).
-HTML_BLOCK_7 = re.compile(
-    rf" {{0,3}}(?:<(?!(?:pre|script|style|textarea)\b)[A-Za-z][A-Za-z0-9-]*(?:{_ATTRIBUTE})*"
-    r"\s*/?>|</[A-Za-z][A-Za-z0-9-]*\s*>)[ \t]*$",
-    re.I,
-)
-ENTITY =re.compile(r"&(?:#([0-9]{1,7})|#[xX]([0-9A-Fa-f]{1,6})|([A-Za-z][A-Za-z0-9]{1,31}));")
-# Spaces or tabs with at most one line ending, between a link's parts; and a link title.
-_LINK_SPACE = re.compile(r"[ \t]*(?:\n[ \t]*)?")
-_LINK_TITLE = re.compile(r'"(?:[^"\\]|\\.)*"|\'(?:[^\'\\]|\\.)*\'|\((?:[^()\\]|\\.)*\)', re.S)
-_ANGLE_DESTINATION = re.compile(r"<(?:[^<>\n\\]|\\[^\n])*>")
-
-
-@dataclass(eq=False)
-class _Run:
-    """A delimiter run of `*` or `_` (CommonMark 6.2): what it can do, and what is left of it."""
-
-    char: str
-    length: int
-    opens: bool
-    closes: bool
-    left: int
-    live: bool = True  # still on the delimiter stack
-
-
-@dataclass(eq=False)
-class _Bracket:
-    """A `[` or `![` on the bracket stack (CommonMark 6.3), and the runs before it."""
-
-    image: bool
-    runs: int
-    active: bool = True
-    link: bool = False
-
-
-def _whitespace(c: str) -> bool:
-    return c == "" or c in "\t\n\f\r" or unicodedata.category(c) == "Zs"
-
-
-def _punctuation(c: str) -> bool:
-    return c != "" and (c in PUNCTUATION or unicodedata.category(c)[0] in "PS")
-
-
-def _entity(m: re.Match[str]) -> str | None:
-    """An entity or numeric character reference's character, or None for no such entity."""
-    decimal, hexadecimal, name = m.groups()
-    if name is not None:
-        return html.entities.html5.get(name + ";")
-    n = int(decimal) if decimal is not None else int(hexadecimal, 16)
-    return chr(n) if 0 < n <= 0x10FFFF and not 0xD800 <= n <= 0xDFFF else "�"
-
-
-def _link_end(text: str, pos: int) -> int | None:
-    """Where an inline link's `(destination "title")`, starting at pos, ends; or None when
-    there is none (CommonMark 6.3: a destination's parentheses balance unless escaped)."""
-    if text[pos : pos + 1] != "(":
-        return None
-    pos = _LINK_SPACE.match(text, pos + 1).end()
-    if text[pos : pos + 1] == "<":
-        m = _ANGLE_DESTINATION.match(text, pos)
-        if not m:
-            return None
-        pos = m.end()
-    else:
-        depth = 0
-        while pos < len(text):
-            c = text[pos]
-            if c == "\\" and text[pos + 1 : pos + 2] in PUNCTUATION:
-                pos += 2
-                continue
-            if c <= " " or c == "\x7f" or (c == ")" and not depth):
-                break
-            depth += {"(": 1, ")": -1}.get(c, 0)
-            pos += 1
-        if depth:
-            return None
-    gap = _LINK_SPACE.match(text, pos).end()
-    title = _LINK_TITLE.match(text, gap) if gap > pos else None
-    pos = _LINK_SPACE.match(text, title.end()).end() if title else gap
-    return pos + 1 if text[pos : pos + 1] == ")" else None
-
-
-def _emphasis(runs: list[_Run], bottom: int) -> None:
-    """CommonMark's "process emphasis" over runs[bottom:]: each closer takes the nearest opener
-    it may pair with, two of each run when both have two, so `**a*` is `*` and an `a` emphasized.
-    What pairs with nothing stays as text."""
-    floor: dict[tuple[str, bool, int], int] = {}
-    i = bottom
-    while i < len(runs):
-        closer = runs[i]
-        if not (closer.live and closer.closes):
-            i += 1
-            continue
-        key = (closer.char, closer.opens, closer.length % 3)
-        j = i - 1
-        while j >= floor.get(key, bottom):
-            opener = runs[j]
-            if opener.live and opener.opens and opener.char == closer.char:
-                either = opener.closes or closer.opens
-                total = opener.length + closer.length
-                if not (either and total % 3 == 0 and (opener.length % 3 or closer.length % 3)):
-                    break
-            j -= 1
-        if j < floor.get(key, bottom):
-            floor[key] = i
-            closer.live = closer.opens
-            i += 1
-            continue
-        used = 2 if opener.left >= 2 and closer.left >= 2 else 1
-        opener.left -= used
-        closer.left -= used
-        for run in runs[j + 1 : i]:
-            run.live = False
-        opener.live = opener.left > 0
-        if not closer.left:
-            closer.live = False
-            i += 1
-    for run in runs[bottom:]:
-        run.live = False
-
-
-def _paragraph(text: str, unread: set[str]) -> str:
-    """One paragraph's inline Markdown as its words, read left to right as CommonMark does."""
-    nodes: list[str | _Run | _Bracket] = []
-    runs: list[_Run] = []
-    brackets: list[_Bracket] = []
-    pos = 0
-    while pos < len(text):
-        c, after = text[pos], text[pos + 1 : pos + 2]
-        if c == "\\" and after in PUNCTUATION:
-            nodes.append(after)
-            pos += 2
-        elif c == "\\" and after == "\n":
-            nodes.append(" ")
-            pos += 2
-        elif c == "`":
-            ticks = re.match(r"`+", text[pos:]).group()
-            close = re.compile(rf"(?<!`){ticks}(?!`)").search(text, pos + len(ticks))
-            if close:
-                code = text[pos + len(ticks) : close.start()].replace("\n", " ")
-                if code.startswith(" ") and code.endswith(" ") and code.strip():
-                    code = code[1:-1]
-                nodes.append(code)
-                pos = close.end()
-            else:
-                nodes.append(ticks)
-                pos += len(ticks)
-        elif c == "<" and (m := AUTOLINK.match(text, pos)):
-            nodes.append(m.group(1))
-            pos = m.end()
-        elif c == "<" and (m := RAW_HTML.match(text, pos)):
-            unread.add("raw HTML")
-            nodes.append(m.group())
-            pos = m.end()
-        elif c == "&" and (m := ENTITY.match(text, pos)) and (char := _entity(m)) is not None:
-            nodes.append(char)
-            pos = m.end()
-        elif c in "*_":
-            end = pos
-            while text[end : end + 1] == c:
-                end += 1
-            before, after = text[pos - 1 : pos], text[end : end + 1]
-            left = not _whitespace(after) and (
-                not _punctuation(after) or _whitespace(before) or _punctuation(before)
-            )
-            right = not _whitespace(before) and (
-                not _punctuation(before) or _whitespace(after) or _punctuation(after)
-            )
-            if c == "*":
-                opens, closes = left, right
-            else:
-                opens = left and (not right or _punctuation(before))
-                closes = right and (not left or _punctuation(after))
-            run = _Run(c, end - pos, opens, closes, end - pos)
-            nodes.append(run)
-            runs.append(run)
-            pos = end
-        elif c == "[" or (c == "!" and after == "["):
-            bracket = _Bracket(c == "!", len(runs))
-            nodes.append(bracket)
-            brackets.append(bracket)
-            pos += 2 if c == "!" else 1
-        elif c == "]" and brackets:
-            opener = brackets.pop()
-            end = _link_end(text, pos + 1) if opener.active else None
-            if end is None:
-                nodes.append("]")
-                pos += 1
-                continue
-            _emphasis(runs, opener.runs)
-            opener.link = True
-            if not opener.image:
-                for bracket in brackets:  # no link inside a link; an image may hold one
-                    bracket.active = bracket.active and bracket.image
-            pos = end
-        else:
-            nodes.append(c)
-            pos += 1
-    _emphasis(runs, 0)
-    words = []
-    for node in nodes:
-        if isinstance(node, _Run):
-            words.append(node.char * node.left)
-        elif isinstance(node, _Bracket):
-            words.append("" if node.link else "![" if node.image else "[")
-        else:
-            words.append(node)
-    return "".join(words)
-
-
-def inline(text: str, unread: set[str] | None = None) -> str:
-    """Markdown text as the words a reader sees, read paragraph by paragraph (a paragraph ends
-    at a blank line) by CommonMark's own inline algorithm (spec 0.31.2, chapter 6), left to
-    right:
-
-    - a code span is its content, its line endings spaces and one padding space stripped from
-      each side; nothing in it is read as Markdown;
-    - a backslash escape of ASCII punctuation is that character, and a backslash ending a line
-      a space;
-    - an autolink (`<scheme:…>`, `<a@b.c>`) is its address, as written: no escape and no
-      emphasis inside it is read;
-    - an entity or numeric character reference is its character (an unknown name is its text,
-      and code point 0 or one that is not a character is U+FFFD), never read as Markdown;
-    - `*` and `_` delimiter runs pair as CommonMark 6.2 says (flanking, the rule of three, the
-      nearest opener first), and a pair is its words; a run left unpaired is its characters;
-    - an inline link or image, `[text](destination "title")`, is its text: the destination may
-      be `<…>` or hold balanced or escaped parentheses, the title is `"…"`, `'…'` or `(…)`, and
-      there is no link inside a link's text, though an image's text may hold one.
-
-    Not read: raw HTML is kept as written, a `[text]` with no `(…)` after it is its
-    characters (a reference link is not resolved), and block structure is not read here
-    (`read_sections` reads it).
-    Raw HTML met in the text is added to `unread` when it is given."""
-    unread = set() if unread is None else unread
-    return "\n\n".join(_paragraph(p, unread) for p in re.split(r"\n[ \t]*\n", text))
+    for line in text.splitlines():
+        if line.startswith("## "):
+            lines = sections.setdefault(flat(line[3:]), [])
+        elif lines is not None:
+            lines.append(line)
+    return {h: Section(h, flat(" ".join(body))) for h, body in sections.items()}
 
 
 def flat(text: str) -> str:
