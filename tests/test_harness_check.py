@@ -593,6 +593,23 @@ class GuideTextTest(unittest.TestCase):
         unquoted = [g for g, c in self.comments().items() if not re.search(r"`[^`\n]+`", c)]
         self.assertEqual([], unquoted)
 
+    # A quote is a substring of the cited section's raw Markdown source (ikigai-slack#222).
+
+    def test_a_quote_is_a_substring_of_the_sections_raw_source(self) -> None:
+        self.edit(
+            "AGENTS.md",
+            r"^- \*\*No claim, no write\.\*\*",
+            "- **No claim, no write.** Read [the loop](#the-loop).",
+        )
+        self.guide("claim-before-write", "`**No claim, no write.** Read [the loop](#the-loop).`")
+        self.assertEqual([], harness.check(self.repo))
+        # What a reader sees is not the source, so it is not a quote of it.
+        self.guide("claim-before-write", "`No claim, no write. Read the loop.`")
+        self.assertEqual(1, len(self.problems("claim-before-write")))
+        # Whitespace runs are collapsed, on both sides.
+        self.guide("claim-before-write", "`**No claim, no write.**   Read [the loop](#the-loop).`")
+        self.assertEqual([], harness.check(self.repo))
+
     # A quote must be in the section the guide cites, not merely somewhere in the file.
 
     def test_a_quote_from_another_section_fails(self) -> None:
