@@ -4,5 +4,5 @@ kind = "audit"
 lens = "security and correctness: who is allowed to talk to the door, token handling, and refusals that don't fire"
 scope = ["artifacts/*/src/**/*.rs"]
 budget = 60
-auditors = ["opus"]
+auditors = ["opus", "sonnet"]
 every = "30d"
