@@ -546,6 +546,11 @@ TASK_LINE = re.compile(r"^\s*[-*] \[( |x|X)\] (\d+(?:\.\d+)*) +(.+?)\s*$")
 CITES = re.compile(r"^(.*?) *\(([^()]+)\)$")
 DELTA_SECTION = re.compile(r"^## (ADDED|MODIFIED|REMOVED|RENAMED) Requirements\s*$")
 REQUIREMENT = re.compile(r"^### Requirement: (.+?)\s*$")
+# A routing hint in a task line: `[<model>]` or `[<model> repo:<name>]`, for a known model.
+MODELS = ("opus", "sonnet", "haiku", "fable")
+HINT = re.compile(r"\[(" + "|".join(MODELS) + r")(?:\s+repo:([A-Za-z0-9._-]+))?\]", re.IGNORECASE)
+# A `(human: ...)` or `[human: ...]` note, with an ASCII or fullwidth colon, anywhere on the line.
+HUMAN = re.compile(r"[(\[]\s*human\s*[:：]", re.IGNORECASE)
 
 
 def slug(name: str) -> str:
@@ -565,6 +570,8 @@ class Task:
     done: bool
     cites: str | None  # the requirement named in the task's trailing parentheses
     requirement: str | None  # its IRI, when the change's delta adds or modifies that name
+    model: str | None = None  # the hint's model, which becomes the `agent:` label
+    repo: str | None = None  # the hint's repo, else the default, when the task is routed
 
     @property
     def iri(self) -> str:
@@ -584,6 +591,40 @@ def openspec_root(repo: Path, layout: dict) -> Path | None:
         if spec.get("format") == "openspec" and spec.get("root"):
             return repo / spec["root"]
     return None
+
+
+def default_repo(repo: Path) -> str:
+    """The last path segment of the origin URL (any host, `.git` and trailing `/` dropped), read
+    with `git remote get-url origin`; the folder's name only when there is no origin."""
+    try:
+        done = subprocess.run(
+            ["git", "-C", str(repo), "remote", "get-url", "origin"],
+            capture_output=True,
+            text=True,
+            check=False,
+        )
+        url = done.stdout.strip() if done.returncode == 0 else ""
+    except OSError:
+        url = ""
+    segment = re.split(r"[/:\\]", url.rstrip("/\\"))[-1] if url else ""
+    segment = segment[:-4] if segment.endswith(".git") else segment
+    return segment or repo.resolve().name
+
+
+def route_hint(text: str, where: str) -> tuple[str, str | None, str | None, bool]:
+    """(the line without its hint, the model, the hint's repo, a human note is on the line).
+
+    A known-model bracket followed at once by `(`, as in `[opus](R)`, is refused: it reads as a
+    link, and the hint and the requirement's parenthesis cannot both be meant."""
+    human = bool(HUMAN.search(text))
+    found = HINT.search(text)
+    if not found:
+        return text, None, None, human
+    for bracket in HINT.finditer(text):
+        if text[bracket.end() :].startswith("("):
+            raise ConfigError(f"{where}: a model hint `{bracket.group(0)}` is followed at once by `(`")
+    rest = (text[: found.start()] + " " + text[found.end() :]).strip()
+    return re.sub(r" {2,}", " ", rest), found.group(1).lower(), found.group(2), human
 
 
 def open_changes(repo: Path, layout: dict) -> list[Change]:
@@ -626,11 +667,20 @@ def open_changes(repo: Path, layout: dict) -> list[Change]:
         tasks = []
         tasks_md = folder / "tasks.md"
         if tasks_md.is_file():
-            for line in tasks_md.read_text(encoding="utf-8").splitlines():
+            # Only `\n` ends a line here, so a refusal's number is the editor's, not splitlines'.
+            # `read_text` would turn a lone `\r` into `\n`, so read the bytes.
+            lines = tasks_md.read_bytes().decode("utf-8").split("\n")
+            for number, line in enumerate(lines, 1):
                 m = TASK_LINE.match(line)
                 if not m:
                     continue
-                text, cites = m.group(3), None
+                where = f"{tasks_md.relative_to(repo)}:{number}"
+                text, model, hint_repo, human = route_hint(m.group(3), where)
+                cites = None
+                if human:
+                    model = None
+                elif model:
+                    hint_repo = hint_repo or default_repo(repo)
                 c = CITES.match(text)
                 if c:
                     text, cites = c.group(1), c.group(2)
@@ -642,6 +692,8 @@ def open_changes(repo: Path, layout: dict) -> list[Change]:
                         done=m.group(1) != " ",
                         cites=cites,
                         requirement=named.get(cites) if cites else None,
+                        model=model,
+                        repo=hint_repo,
                     )
                 )
         changes.append(Change(folder.name, title, artifacts, tasks))
@@ -655,7 +707,10 @@ APPENDED = re.compile(r"^(\S+#\d+) (\S+)(?: (existing) (\S+))?\s*$", re.MULTILIN
 
 def seed_request(change: Change, task: Task) -> tuple[str, str, str]:
     """(the append's arguments, its content, a one-line description) for one open task."""
-    labels = ",".join([f"change:{change.id}", *(f"artifact:{a}" for a in change.artifacts)])
+    routed = [f"agent:{task.model}", f"repo:{task.repo}"] if task.model else []
+    labels = ",".join(
+        [f"change:{change.id}", *(f"artifact:{a}" for a in change.artifacts), *routed]
+    )
     about = " ".join([task.iri, *([task.requirement] if task.requirement else [])])
     words = [f"labels={labels}", f"key={task.iri}", f'about="{about}"']
     body = [
