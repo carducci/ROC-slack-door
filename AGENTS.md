@@ -229,3 +229,27 @@ ikigraph's `artifacts/team/design-classes.toml`, and it sets the form:
 
 A design that hits a wall in the kernel is a finding. Say so in your report rather than coding
 around it.
+
+## Commit in Arlo's Commit Notation
+
+Every commit's first line starts `<risk> <intention> `, then the summary, e.g.
+`^ F Refuse a thread key with a space (ledger item 412)`
+(https://github.com/RefactoringCombos/ArlosCommitNotation). Reviewers' commits on a `review/`
+branch too.
+
+- Risk, from what you actually verified: `.` proven safe (a tool or scripted refactoring, or
+  tests, docs or tooling only), `^` validated (tests ran green; for `F` or `B`, also 8 changed
+  lines or fewer, tests included), `!` risky (a known risk you didn't check), `@` broken (a
+  savepoint that may not build). No test run, no `^`.
+- Intention, exactly one per commit. Uppercase changes one behaviour, lowercase changes none:
+  `F` feature, `B` bugfix, `r` refactoring, `d` documentation, `e` environment and tooling,
+  `t` tests only, `s` spec. Never `@ @`.
+- Microcommits: one intention per commit, as small as builds and passes. Split an `F` or `B` over
+  8 lines rather than marking it `!`.
+
+## Tick your task's box
+
+If your item is an OpenSpec task (its title begins `<change> <N.M>:`), tick it in the same pull
+request: `- [ ] N.M` becomes `- [x] N.M` in `openspec/changes/<change>/tasks.md`, and nothing else
+there changes. The spec on main then moves with the code in one merge. A fix round stacked on its
+task's PR doesn't tick again. Dax's router merges, or hands Michael, no task PR that leaves it unticked.
