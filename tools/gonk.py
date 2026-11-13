@@ -620,8 +620,9 @@ def route_hint(text: str, where: str) -> tuple[str, str | None, str | None, bool
     found = HINT.search(text)
     if not found:
         return text, None, None, human
-    if text[found.end() :].startswith("("):
-        raise ConfigError(f"{where}: a model hint `{found.group(0)}` is followed at once by `(`")
+    for bracket in HINT.finditer(text):
+        if text[bracket.end() :].startswith("("):
+            raise ConfigError(f"{where}: a model hint `{bracket.group(0)}` is followed at once by `(`")
     rest = (text[: found.start()] + " " + text[found.end() :]).strip()
     return re.sub(r" {2,}", " ", rest), found.group(1).lower(), found.group(2), human
 
