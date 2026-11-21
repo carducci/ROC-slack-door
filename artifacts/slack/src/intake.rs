@@ -14,8 +14,8 @@ use crate::{sniff, FileEntry, Files, Objects, SlackFile, SlackTransport};
 
 /// The channel lists no file types.
 pub const FILES_NOT_ACCEPTED: &str = "files-not-accepted";
-/// Slack could not serve the file: no private URL, one off Slack's file host, or a download
-/// that failed.
+/// Slack could not serve the file (no private URL, one off Slack's file host, or a download
+/// that failed), or the door could not keep it.
 pub const FILE_UNAVAILABLE: &str = "file-unavailable";
 /// The file is larger than the channel's limit, by Slack's report or by its bytes.
 pub const FILE_TOO_LARGE: &str = "file-too-large";
@@ -33,8 +33,8 @@ pub struct Accepts {
 }
 
 /// Takes in `file` for `channel`: its resource name, `urn:slack:channel:{channel}:file:b3:{hex}`,
-/// once it is kept, or the reason it was refused. An error is the door's own (the store could
-/// not be written), never the file's.
+/// once it is kept, or the reason it was refused. A file the store can't keep is noted as
+/// `file-unavailable`, so one file never loses the post it came with.
 pub(crate) fn take<T: SlackTransport>(
     transport: &mut T,
     objects: &Objects,
@@ -62,7 +62,25 @@ pub(crate) fn take<T: SlackTransport>(
     let Some(content_type) = sniff(&bytes).filter(|t| accepts.types.iter().any(|a| a == t)) else {
         return Ok(FILE_TYPE_REFUSED.to_owned());
     };
-    let id = objects.put(&bytes)?;
+    // A store that can't keep the file loses that file, never the post: it is noted as
+    // unavailable, like a download that failed, and the cause is logged.
+    Ok(keep(objects, files, channel, file, content_type, &bytes).unwrap_or_else(|e| {
+        eprintln!("file {:?} in {channel} not kept: {e}", file.id);
+        FILE_UNAVAILABLE.to_owned()
+    }))
+}
+
+/// Keeps `bytes`, sniffed as `content_type`, in the object store and names them in `channel`'s
+/// index: the resource name.
+fn keep(
+    objects: &Objects,
+    files: &Files,
+    channel: &str,
+    file: &SlackFile,
+    content_type: &str,
+    bytes: &[u8],
+) -> io::Result<String> {
+    let id = objects.put(bytes)?;
     // The index names the file by Slack's id for it, with anything but letters and digits
     // dropped, so nothing Slack sent can break an index line.
     let slack_id = file.id.chars().filter(char::is_ascii_alphanumeric).collect();
