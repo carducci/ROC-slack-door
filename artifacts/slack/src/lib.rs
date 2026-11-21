@@ -14,7 +14,7 @@
 
 use std::collections::{BTreeMap, BTreeSet, VecDeque};
 
-use ikigai_core::Capability;
+use ikigai_core::{Capability, ContentId};
 
 mod conversation;
 mod files;
@@ -157,6 +157,10 @@ pub enum Refusal {
     NotGranted(String),
     /// The channel name is not one the host declares.
     NoChannel(String),
+    /// A file address is not `b3:` and 64 lowercase hex digits.
+    BadFile,
+    /// The channel never received a file by that name.
+    NoFile,
 }
 
 impl Refusal {
@@ -170,6 +174,8 @@ impl Refusal {
             Refusal::BadReaction => "bad-reaction",
             Refusal::NotGranted(_) => "not-granted",
             Refusal::NoChannel(_) => "no-channel",
+            Refusal::BadFile => "bad-file",
+            Refusal::NoFile => "no-file",
         }
     }
 }
@@ -180,6 +186,9 @@ pub const READ: &str = "read";
 pub const POST: &str = "post";
 /// The action that adds or removes a reaction on a thread.
 pub const REACT: &str = "react";
+
+/// The action that reads a file a channel received.
+pub const FILE_READ: &str = "file:read";
 
 /// The capability that lets a caller `action` (`READ`, `POST` or `REACT`) in the channel `name`:
 /// `urn:cap:slack:channel:{name}:{action}`.
@@ -205,6 +214,38 @@ pub fn check_channel<'a>(declared: &[String], name: &'a str) -> Result<&'a str, 
     } else {
         Err(Refusal::NoChannel(name.to_owned()))
     }
+}
+
+/// Checks a file's address, `b3:` and 64 lowercase hex digits, and parses it.
+pub fn check_file(id: &str) -> Result<ContentId, Refusal> {
+    let hex = id.strip_prefix("b3:").ok_or(Refusal::BadFile)?;
+    let lower = |c: char| c.is_ascii_digit() || ('a'..='f').contains(&c);
+    if hex.len() == 64 && hex.chars().all(lower) {
+        ContentId::parse(id).map_err(|_| Refusal::BadFile)
+    } else {
+        Err(Refusal::BadFile)
+    }
+}
+
+/// Why a file could not be read.
+#[derive(Debug)]
+pub enum FileError {
+    Refused(Refusal),
+    State(std::io::Error),
+}
+
+/// A file `channel` received, as its indexed media type and its bytes. Another channel's name
+/// for the same bytes does not count: only this channel's index is asked.
+pub fn read_file(
+    files: &Files,
+    objects: &Objects,
+    channel: &str,
+    id: &ContentId,
+) -> Result<(String, Vec<u8>), FileError> {
+    let missing = || FileError::Refused(Refusal::NoFile);
+    let entry = files.get(channel, id).map_err(FileError::State)?.ok_or_else(missing)?;
+    let bytes = objects.get(id).map_err(FileError::State)?.ok_or_else(missing)?;
+    Ok((entry.content_type, bytes))
 }
 
 /// Checks a reaction's name, a Slack emoji name, and returns it unchanged when it is valid.
@@ -297,6 +338,15 @@ pub fn descriptions() -> Vec<Meta> {
                 ("source", "urn:cap:slack:channel:{name}:read"),
                 ("delete", "urn:cap:slack:channel:{name}:read"),
             ],
+        },
+        Meta {
+            resource: "urn:slack:channel:{name}:file:b3:{hex}",
+            description: "A file the declared channel `name` received, named by the BLAKE3 digest \
+                of its bytes. Reading returns the bytes with the media type found from them, \
+                never one Slack or the sender claimed; the answer never changes, so it may be \
+                cached. A name the channel never received is refused as `no-file`, a malformed \
+                one as `bad-file`.",
+            verbs: vec![("source", "urn:cap:slack:channel:{name}:file:read")],
         },
     ]
 }
@@ -595,6 +645,7 @@ mod tests {
                 "urn:slack:channel:{name}:thread:{key}",
                 "urn:slack:channel:{name}:thread:{key}:reaction:{reaction}",
                 "urn:slack:channel:{name}:inbox",
+                "urn:slack:channel:{name}:file:b3:{hex}",
             ]
         );
         for meta in descriptions() {
