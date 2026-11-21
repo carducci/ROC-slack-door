@@ -12,7 +12,7 @@
 //! The transport, its in-memory fake, the thread and reaction resources and the inbox are in
 //! place.
 
-use std::collections::{BTreeSet, VecDeque};
+use std::collections::{BTreeMap, BTreeSet, VecDeque};
 
 use ikigai_core::Capability;
 
@@ -51,6 +51,11 @@ pub trait SlackTransport {
     /// The messages of the thread that opens at `root`: the opening message first, then the
     /// replies, in the order Slack holds them.
     fn replies(&mut self, channel: &str, root: &str) -> Result<Vec<Message>, TransportError>;
+
+    /// The bytes of a file at its private URL, read with the bot token, and never more than
+    /// `max` of them: a longer file comes back cut at `max`, so a caller that asks for one byte
+    /// past its limit can tell a file that is too large.
+    fn download(&mut self, url: &str, max: u64) -> Result<Vec<u8>, TransportError>;
 
     /// The events Slack has delivered since the last call, oldest first.
     fn take_events(&mut self) -> Vec<Event>;
@@ -317,11 +322,23 @@ pub struct FakeSlack {
     events: Vec<Event>,
     failures: VecDeque<TransportError>,
     answers: VecDeque<String>,
+    files: BTreeMap<String, Vec<u8>>,
+    downloads: Vec<String>,
 }
 
 impl FakeSlack {
     pub fn new() -> Self {
         Self::default()
+    }
+
+    /// Makes `bytes` the file Slack serves at `url`.
+    pub fn serve_file(&mut self, url: &str, bytes: &[u8]) {
+        self.files.insert(url.to_owned(), bytes.to_vec());
+    }
+
+    /// Every URL the door has asked to download, oldest first.
+    pub fn downloads(&self) -> &[String] {
+        &self.downloads
     }
 
     /// Makes the next call to the transport fail with `error`, as Slack would answer it.
@@ -444,6 +461,16 @@ impl SlackTransport for FakeSlack {
             })
             .map(|stored| stored.message.clone())
             .collect())
+    }
+
+    fn download(&mut self, url: &str, max: u64) -> Result<Vec<u8>, TransportError> {
+        self.downloads.push(url.to_owned());
+        self.next_failure()?;
+        let bytes = self
+            .files
+            .get(url)
+            .ok_or_else(|| TransportError::Rejected("HTTP 404".to_owned()))?;
+        Ok(bytes[..bytes.len().min(max as usize)].to_vec())
     }
 
     fn take_events(&mut self) -> Vec<Event> {

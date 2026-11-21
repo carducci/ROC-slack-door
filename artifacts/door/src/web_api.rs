@@ -2,6 +2,7 @@
 //! authorised by the bot token in the `Authorization` header. The token is never put in an
 //! error or a log line: errors carry only what Slack answered.
 
+use std::io::Read;
 use std::sync::mpsc::Receiver;
 use std::time::Duration;
 
@@ -60,13 +61,17 @@ impl WebApi {
 
 /// Reads one HTTP answer from a Web API call: its JSON when Slack said ok, its error otherwise.
 fn answered(response: Result<ureq::Response, ureq::Error>) -> Result<Value, TransportError> {
+    let response = refused(response)?;
+    let value: Value = response
+        .into_json()
+        .map_err(|e| TransportError::Unavailable(format!("unreadable answer: {e}")))?;
+    answer(value)
+}
+
+/// The response to a request Slack answered with success, or why it did not.
+fn refused(response: Result<ureq::Response, ureq::Error>) -> Result<ureq::Response, TransportError> {
     match response {
-            Ok(response) => {
-                let value: Value = response
-                    .into_json()
-                    .map_err(|e| TransportError::Unavailable(format!("unreadable answer: {e}")))?;
-                answer(value)
-            }
+            Ok(response) => Ok(response),
             Err(ureq::Error::Status(429, response)) => Err(TransportError::RateLimited {
                 retry_after_secs: response
                     .header("Retry-After")
@@ -157,6 +162,28 @@ impl SlackTransport for WebApi {
             .unwrap_or_default())
     }
 
+    /// A file at its private URL, with the bot token, reading no more than `max` bytes. An
+    /// answer that is a web page is Slack asking to sign in (the token lacks `files:read`), not
+    /// the file.
+    fn download(&mut self, url: &str, max: u64) -> Result<Vec<u8>, TransportError> {
+        let response = refused(
+            self.agent
+                .get(url)
+                .set("Authorization", &format!("Bearer {}", self.token))
+                .call(),
+        )?;
+        if response.content_type() == "text/html" {
+            return Err(TransportError::Rejected("a sign-in page, not the file".to_owned()));
+        }
+        let mut bytes = Vec::new();
+        response
+            .into_reader()
+            .take(max)
+            .read_to_end(&mut bytes)
+            .map_err(|e| TransportError::Unavailable(format!("download cut short: {e}")))?;
+        Ok(bytes)
+    }
+
     /// The events the Socket Mode connection has heard since the last call.
     fn take_events(&mut self) -> Vec<Event> {
         self.events.try_iter().collect()
@@ -225,6 +252,59 @@ mod tests {
         assert!(request_line.starts_with("GET /conversations.replies?"), "{request_line}");
         assert!(request_line.contains("channel=C1"), "{request_line}");
         assert!(request_line.contains("ts=1700000000.000001"), "{request_line}");
+    }
+
+    /// Serves one request on a loopback port with `body` as `content_type`, and records the
+    /// request's header lines.
+    fn one_file(
+        content_type: &'static str,
+        body: Vec<u8>,
+    ) -> (String, std::thread::JoinHandle<Vec<String>>) {
+        use std::io::{BufRead, BufReader, Write};
+        let listener = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
+        let base = format!("http://{}", listener.local_addr().unwrap());
+        let handle = std::thread::spawn(move || {
+            let (mut stream, _) = listener.accept().unwrap();
+            let mut reader = BufReader::new(stream.try_clone().unwrap());
+            let mut lines = Vec::new();
+            loop {
+                let mut line = String::new();
+                if reader.read_line(&mut line).unwrap() <= 2 {
+                    break;
+                }
+                lines.push(line.trim_end().to_owned());
+            }
+            let head = format!(
+                "HTTP/1.1 200 OK\r\nContent-Type: {content_type}\r\nContent-Length: {}\r\nConnection: close\r\n\r\n",
+                body.len()
+            );
+            stream.write_all(head.as_bytes()).unwrap();
+            let _ = stream.write_all(&body);
+            lines
+        });
+        (base, handle)
+    }
+
+    #[test]
+    fn a_download_sends_the_bot_token_and_stops_at_the_cap() {
+        let (base, server) = one_file("image/png", vec![7u8; 5000]);
+        let mut api = WebApi::new("xoxb-test", std::sync::mpsc::channel().1);
+        let bytes = api.download(&format!("{base}/files-pri/T1-F1/a.png"), 1001).unwrap();
+        assert_eq!(bytes.len(), 1001, "the download was not cut at the cap");
+        let lines = server.join().unwrap();
+        assert!(lines[0].starts_with("GET /files-pri/T1-F1/a.png"), "{lines:?}");
+        assert!(
+            lines.iter().any(|l| l.eq_ignore_ascii_case("authorization: Bearer xoxb-test")),
+            "the bot token was not sent: {lines:?}"
+        );
+    }
+
+    #[test]
+    fn a_sign_in_page_is_not_the_file() {
+        let (base, server) = one_file("text/html", b"<html>sign in</html>".to_vec());
+        let mut api = WebApi::new("xoxb-test", std::sync::mpsc::channel().1);
+        assert!(api.download(&format!("{base}/files-pri/T1-F1/a.png"), 100).is_err());
+        server.join().unwrap();
     }
 
     #[test]
