@@ -15,7 +15,7 @@ mod socket;
 mod web_api;
 
 use config::Config;
-use roc_slack_door::{Inbox, SlackTransport, Threads};
+use roc_slack_door::{Accepts, Inbox, SlackTransport, Threads};
 
 /// How often the inbox loop takes what Socket Mode has heard.
 const POLL: Duration = Duration::from_millis(200);
@@ -86,6 +86,12 @@ fn run(config: Config) -> ExitCode {
             return ExitCode::from(2);
         }
     };
+    for channel in &config.channels {
+        if let Some(max_bytes) = channel.file_max_bytes.filter(|_| !channel.file_types.is_empty()) {
+            let types = channel.file_types.clone();
+            inbox.accept_files(&channel.name, Accepts { types, max_bytes });
+        }
+    }
 
     let declared = config.channels.iter().map(|c| c.name.clone()).collect();
     let spaces = config.state_dir.join("spaces");

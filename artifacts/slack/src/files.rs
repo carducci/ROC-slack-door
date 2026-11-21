@@ -25,6 +25,7 @@ pub struct FileEntry {
 }
 
 /// The indexes of every channel, beside the object store they point into.
+#[derive(Debug)]
 pub struct Files {
     dir: PathBuf,
 }

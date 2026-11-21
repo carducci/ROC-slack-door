@@ -7,6 +7,9 @@ use std::collections::BTreeMap;
 use std::fmt;
 use std::path::PathBuf;
 
+// The media types the door can confirm from a file's bytes, the ones its sniffer knows.
+use roc_slack_door::SNIFFABLE;
+
 pub const BOT_TOKEN: &str = "SLACK_BOT_TOKEN";
 pub const APP_TOKEN: &str = "SLACK_APP_TOKEN";
 pub const CHANNELS: &str = "SLACK_CHANNELS";
@@ -30,10 +33,6 @@ pub struct ChannelConfig {
     /// The most bytes one file may have; `Some` whenever `file_types` is not empty.
     pub file_max_bytes: Option<u64>,
 }
-
-/// The media types the door can confirm from a file's bytes. This stands in for asking
-/// `ikigai-sniff`, which is not yet a dependency (see the draft PR's question).
-const SNIFFABLE: [&str; 4] = ["image/png", "image/jpeg", "image/gif", "image/webp"];
 
 /// Everything the door needs from its host.
 #[derive(Clone)]

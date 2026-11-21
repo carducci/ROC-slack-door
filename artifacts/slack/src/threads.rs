@@ -442,6 +442,10 @@ mod tests {
             panic!("read replies in {channel:?}")
         }
 
+        fn download(&mut self, url: &str, _: u64) -> Result<Vec<u8>, TransportError> {
+            panic!("download {url:?}")
+        }
+
         fn take_events(&mut self) -> Vec<Event> {
             panic!("took events")
         }

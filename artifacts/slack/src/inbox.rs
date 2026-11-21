@@ -3,13 +3,14 @@
 //! by a Slack id. A speaker's top-level message opens a thread under a key the door mints, and a
 //! reply in a thread the door does not know carries no key.
 
-use std::collections::BTreeSet;
+use std::collections::{BTreeMap, BTreeSet};
 use std::fs;
 use std::io::{self, Write};
 use std::path::{Path, PathBuf};
 
 use crate::conversation::utc;
-use crate::{check_key, is_slack_ts, Event, SlackTransport, Threads};
+use crate::intake::{self, Accepts};
+use crate::{check_key, is_slack_ts, Event, Files, Objects, SlackTransport, Threads};
 
 /// The file in the state directory that lists the ids of events already delivered.
 const DELIVERED_FILE: &str = "delivered.txt";
@@ -27,8 +28,9 @@ pub enum Delivery {
         /// The time in UTC, as `2023-11-14T22:13:20Z`.
         time: String,
         text: String,
-        /// One entry per file the message carried: its resource name, or the reason it was
-        /// refused (`files-not-accepted` while no channel takes files).
+        /// One entry per file the message carried, in its order: its resource name, or the
+        /// reason it was refused (`files-not-accepted`, `file-unavailable`, `file-too-large` or
+        /// `file-type-refused`).
         files: Vec<String>,
     },
     /// A reaction by an allowed person on the opening message of the thread `key` names.
@@ -61,6 +63,10 @@ pub struct Inbox {
     bot_user: String,
     state_file: PathBuf,
     delivered: BTreeSet<String>,
+    /// What each channel, by name, accepts as files; a channel not here takes none.
+    accepts: BTreeMap<String, Accepts>,
+    objects: Objects,
+    files: Files,
 }
 
 impl Inbox {
@@ -102,7 +108,17 @@ impl Inbox {
             bot_user: bot_user.to_owned(),
             state_file,
             delivered,
+            accepts: BTreeMap::new(),
+            objects: Objects::open(state_dir)?,
+            files: Files::open(state_dir)?,
         })
+    }
+
+    /// Lets the declared channel `name` take files: those whose bytes are one of `accepts`'s
+    /// types and no larger than its limit. They are kept in the state directory's object store
+    /// and named in the channel's index.
+    pub fn accept_files(&mut self, name: &str, accepts: Accepts) {
+        self.accepts.insert(name.to_owned(), accepts);
     }
 
     /// Decides what, if anything, an event delivers. A redelivery of an event already delivered
@@ -173,6 +189,14 @@ impl Inbox {
                         }
                     }
                 };
+                let accepts = self.accepts.get(&name);
+                let files = files
+                    .iter()
+                    .map(|file| {
+                        let transport = threads.transport_mut();
+                        intake::take(transport, &self.objects, &self.files, &name, accepts, file)
+                    })
+                    .collect::<io::Result<_>>()?;
                 Some((
                     name,
                     Delivery::Message {
@@ -180,8 +204,7 @@ impl Inbox {
                         user,
                         time: utc(&ts),
                         text,
-                        // No channel declares file types yet, so every file is refused.
-                        files: files.iter().map(|_| "files-not-accepted".to_owned()).collect(),
+                        files,
                     },
                 ))
             }
@@ -528,6 +551,215 @@ mod tests {
             ("fixme".to_owned(), "C2".to_owned(), vec!["U2".to_owned()]),
         ];
         (Inbox::open_channels(&dir, BOT, &channels).unwrap(), threads, root)
+    }
+
+    const PNG: &[u8] = b"\x89PNG\r\n\x1a\n\0\0\0\rIHDR a screenshot";
+    const EXE: &[u8] = b"MZ\x90\0\x03\0\0\0 a Windows executable";
+
+    /// `two_channels`, with `fixme` taking PNGs of at most 100 bytes, and the state directory.
+    fn fixme_takes_pngs(name: &str) -> (Inbox, Threads<FakeSlack>, PathBuf) {
+        let (mut inbox, threads, _) = two_channels(name);
+        inbox.accept_files("fixme", Accepts { types: vec!["image/png".into()], max_bytes: 100 });
+        let dir =
+            std::env::temp_dir().join(format!("roc-slack-door-inbox-{name}-{}", std::process::id()));
+        (inbox, threads, dir)
+    }
+
+    /// A post by `fixme`'s speaker carrying `files`, each a (Slack's size, private URL) pair.
+    fn post_with(id: &str, channel: &str, files: &[(u64, &str)]) -> Event {
+        Event::Message {
+            id: id.to_owned(),
+            channel: channel.to_owned(),
+            user: if channel == "C2" { "U2" } else { "U1" }.to_owned(),
+            ts: "1700000200.000100".to_owned(),
+            thread: None,
+            text: "cosmetic: the save button overlaps the footer".to_owned(),
+            files: files
+                .iter()
+                .map(|(size, url)| crate::SlackFile {
+                    id: "F0SHOT0001".to_owned(),
+                    size: *size,
+                    url_private: url.to_string(),
+                })
+                .collect(),
+        }
+    }
+
+    const SHOT: &str = "https://files.slack.com/files-pri/T1-F1/screenshot.png";
+
+    fn files_of(delivery: Option<(String, Delivery)>) -> Vec<String> {
+        match delivery {
+            Some((_, Delivery::Message { files, .. })) => files,
+            other => panic!("the post did not land: {other:?}"),
+        }
+    }
+
+    /// Every object in the store, by path.
+    fn objects_in(dir: &Path) -> Vec<PathBuf> {
+        fn walk(dir: &Path, found: &mut Vec<PathBuf>) {
+            for e in fs::read_dir(dir).into_iter().flatten().flatten() {
+                if e.path().is_dir() {
+                    walk(&e.path(), found);
+                } else {
+                    found.push(e.path());
+                }
+            }
+        }
+        let mut found = Vec::new();
+        walk(&dir.join("objects"), &mut found);
+        found
+    }
+
+    #[test]
+    fn a_screenshot_lands_named_by_its_digest_and_is_kept_with_its_sniffed_type() {
+        let (mut inbox, mut threads, dir) = fixme_takes_pngs("file-png");
+        threads.transport_mut().serve_file(SHOT, PNG);
+        let event = post_with("Ev1", "C2", &[(PNG.len() as u64, SHOT)]);
+        let files = files_of(inbox.deliver_to(event, &mut threads).unwrap());
+        let id = ikigai_core::ContentId::of(PNG);
+        assert_eq!(files, vec![format!("urn:slack:channel:fixme:file:{id}")]);
+        assert_eq!(Objects::open(&dir).unwrap().get(&id).unwrap().as_deref(), Some(PNG));
+        let entry = Files::open(&dir).unwrap().get("fixme", &id).unwrap().unwrap();
+        assert_eq!(entry.content_type, "image/png");
+    }
+
+    #[test]
+    fn a_renamed_executable_is_refused_by_its_bytes_and_nothing_is_stored() {
+        let (mut inbox, mut threads, dir) = fixme_takes_pngs("file-exe");
+        threads.transport_mut().serve_file(SHOT, EXE);
+        let event = post_with("Ev1", "C2", &[(EXE.len() as u64, SHOT)]);
+        let files = files_of(inbox.deliver_to(event, &mut threads).unwrap());
+        assert_eq!(files, vec!["file-type-refused".to_owned()]);
+        assert!(objects_in(&dir).is_empty());
+        assert!(Files::open(&dir).unwrap().list("fixme").unwrap().is_empty());
+    }
+
+    #[test]
+    fn an_image_of_a_type_the_channel_does_not_list_is_refused() {
+        let (mut inbox, mut threads, dir) = fixme_takes_pngs("file-gif");
+        threads.transport_mut().serve_file(SHOT, b"GIF89a\x01\0\x01\0");
+        let event = post_with("Ev1", "C2", &[(10, SHOT)]);
+        let files = files_of(inbox.deliver_to(event, &mut threads).unwrap());
+        assert_eq!(files, vec!["file-type-refused".to_owned()]);
+        assert!(objects_in(&dir).is_empty());
+    }
+
+    #[test]
+    fn a_file_slack_reports_too_large_is_refused_without_a_download() {
+        let (mut inbox, mut threads, dir) = fixme_takes_pngs("file-big-reported");
+        threads.transport_mut().serve_file(SHOT, PNG);
+        let event = post_with("Ev1", "C2", &[(101, SHOT)]);
+        let files = files_of(inbox.deliver_to(event, &mut threads).unwrap());
+        assert_eq!(files, vec!["file-too-large".to_owned()]);
+        assert!(threads.transport().downloads().is_empty());
+        assert!(objects_in(&dir).is_empty());
+    }
+
+    #[test]
+    fn a_file_larger_than_slack_said_is_cut_at_one_byte_past_the_limit_and_refused() {
+        let (mut inbox, mut threads, dir) = fixme_takes_pngs("file-big-bytes");
+        let mut big = PNG.to_vec();
+        big.resize(5000, 0);
+        threads.transport_mut().serve_file(SHOT, &big);
+        let event = post_with("Ev1", "C2", &[(10, SHOT)]);
+        let files = files_of(inbox.deliver_to(event, &mut threads).unwrap());
+        assert_eq!(files, vec!["file-too-large".to_owned()]);
+        assert!(objects_in(&dir).is_empty());
+    }
+
+    #[test]
+    fn a_file_of_exactly_the_limit_is_kept() {
+        let (mut inbox, mut threads, dir) = fixme_takes_pngs("file-at-limit");
+        let mut at = PNG.to_vec();
+        at.resize(100, 0);
+        threads.transport_mut().serve_file(SHOT, &at);
+        let event = post_with("Ev1", "C2", &[(100, SHOT)]);
+        let files = files_of(inbox.deliver_to(event, &mut threads).unwrap());
+        assert!(files[0].starts_with("urn:slack:channel:fixme:file:b3:"), "{files:?}");
+        assert_eq!(objects_in(&dir).len(), 1);
+    }
+
+    #[test]
+    fn a_file_slack_cannot_serve_is_unavailable_and_the_post_still_lands() {
+        let (mut inbox, mut threads, dir) = fixme_takes_pngs("file-unavailable");
+        threads.transport_mut().serve_file(SHOT, PNG);
+        threads.transport_mut().fail_next(crate::TransportError::Unavailable("HTTP 503".into()));
+        let missing = "https://files.slack.com/files-pri/T1-F9/gone.png";
+        let event = post_with("Ev1", "C2", &[(10, SHOT), (0, ""), (10, missing)]);
+        let files = files_of(inbox.deliver_to(event, &mut threads).unwrap());
+        assert_eq!(files, vec!["file-unavailable"; 3]);
+        assert!(objects_in(&dir).is_empty());
+    }
+
+    #[test]
+    fn the_bot_token_goes_only_to_slacks_file_host() {
+        let (mut inbox, mut threads, _) = fixme_takes_pngs("file-host");
+        let elsewhere = "https://files.slack.com.example.org/a.png";
+        threads.transport_mut().serve_file(elsewhere, PNG);
+        let event = post_with("Ev1", "C2", &[(10, elsewhere), (10, "http://files.slack.com/a.png")]);
+        let files = files_of(inbox.deliver_to(event, &mut threads).unwrap());
+        assert_eq!(files, vec!["file-unavailable"; 2]);
+        assert!(threads.transport().downloads().is_empty());
+    }
+
+    #[test]
+    fn a_file_in_a_channel_that_takes_none_is_not_downloaded() {
+        let (mut inbox, mut threads, dir) = fixme_takes_pngs("file-none-download");
+        threads.transport_mut().serve_file(SHOT, PNG);
+        let event = post_with("Ev1", "C1", &[(10, SHOT)]);
+        let files = files_of(inbox.deliver_to(event, &mut threads).unwrap());
+        assert_eq!(files, vec!["files-not-accepted".to_owned()]);
+        assert!(threads.transport().downloads().is_empty());
+        assert!(objects_in(&dir).is_empty());
+    }
+
+    #[test]
+    fn the_same_screenshot_in_two_posts_is_one_object_under_one_name() {
+        let (mut inbox, mut threads, dir) = fixme_takes_pngs("file-twice");
+        threads.transport_mut().serve_file(SHOT, PNG);
+        let first = files_of(inbox.deliver_to(post_with("Ev1", "C2", &[(10, SHOT)]), &mut threads).unwrap());
+        let mut second = post_with("Ev2", "C2", &[(10, SHOT)]);
+        if let Event::Message { ts, .. } = &mut second {
+            *ts = "1700000300.000100".to_owned();
+        }
+        let second = files_of(inbox.deliver_to(second, &mut threads).unwrap());
+        assert_eq!(first, second);
+        assert_eq!(objects_in(&dir).len(), 1);
+    }
+
+    #[test]
+    fn a_file_the_store_cannot_keep_does_not_lose_the_post() {
+        let (mut inbox, mut threads, dir) = fixme_takes_pngs("file-store-fails");
+        let other = "https://files.slack.com/files-pri/T1-F2/second.png";
+        let second = [PNG, b" another"].concat();
+        threads.transport_mut().serve_file(SHOT, PNG);
+        threads.transport_mut().serve_file(other, &second);
+        // The second file's fan-out directory is taken by a plain file, as a full or broken
+        // disk would refuse it, so the store can keep the first file and not the second.
+        let hex = ikigai_core::ContentId::of(&second).to_string();
+        fs::write(dir.join("objects").join(&hex[3..5]), b"not a directory").unwrap();
+        let event = post_with("Ev1", "C2", &[(10, SHOT), (10, other)]);
+        let delivered = inbox.deliver_to(event, &mut threads);
+        let named = Files::open(&dir).unwrap().list("fixme").unwrap();
+        assert!(
+            matches!(delivered, Ok(Some(_))),
+            "the post was lost ({delivered:?}), and the files it kept are named by no tuple: {named:?}"
+        );
+    }
+
+    #[test]
+    fn bytes_kept_before_stay_when_the_index_cannot_name_them_again() {
+        let (mut inbox, mut threads, dir) = fixme_takes_pngs("file-index-fails-kept");
+        threads.transport_mut().serve_file(SHOT, PNG);
+        files_of(inbox.deliver_to(post_with("Ev1", "C2", &[(10, SHOT)]), &mut threads).unwrap());
+        fs::write(dir.join("files/fixme.tsv"), "not an index line\n").unwrap();
+        let mut second = post_with("Ev2", "C2", &[(10, SHOT)]);
+        if let Event::Message { ts, .. } = &mut second {
+            *ts = "1700000300.000100".to_owned();
+        }
+        let files = files_of(inbox.deliver_to(second, &mut threads).unwrap());
+        assert_eq!(files, vec!["file-unavailable".to_owned()]);
+        assert_eq!(objects_in(&dir).len(), 1, "bytes stored before this take are not its to remove");
     }
 
     #[test]

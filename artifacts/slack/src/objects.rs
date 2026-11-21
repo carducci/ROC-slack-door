@@ -18,6 +18,7 @@ use ikigai_core::ContentId;
 static NEXT_TMP: AtomicU64 = AtomicU64::new(0);
 
 /// A write-once store of bytes by content.
+#[derive(Debug)]
 pub struct Objects {
     root: PathBuf,
 }
