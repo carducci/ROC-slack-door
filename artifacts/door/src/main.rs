@@ -10,6 +10,8 @@ use std::thread;
 use std::time::Duration;
 
 mod config;
+#[cfg(test)]
+mod file_tests;
 mod serve;
 mod socket;
 mod web_api;
