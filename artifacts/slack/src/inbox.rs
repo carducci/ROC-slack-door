@@ -728,6 +728,26 @@ mod tests {
     }
 
     #[test]
+    fn a_file_the_store_cannot_keep_does_not_lose_the_post() {
+        let (mut inbox, mut threads, dir) = fixme_takes_pngs("file-store-fails");
+        let other = "https://files.slack.com/files-pri/T1-F2/second.png";
+        let second = [PNG, b" another"].concat();
+        threads.transport_mut().serve_file(SHOT, PNG);
+        threads.transport_mut().serve_file(other, &second);
+        // The second file's fan-out directory is taken by a plain file, as a full or broken
+        // disk would refuse it, so the store can keep the first file and not the second.
+        let hex = ikigai_core::ContentId::of(&second).to_string();
+        fs::write(dir.join("objects").join(&hex[3..5]), b"not a directory").unwrap();
+        let event = post_with("Ev1", "C2", &[(10, SHOT), (10, other)]);
+        let delivered = inbox.deliver_to(event, &mut threads);
+        let named = Files::open(&dir).unwrap().list("fixme").unwrap();
+        assert!(
+            matches!(delivered, Ok(Some(_))),
+            "the post was lost ({delivered:?}), and the files it kept are named by no tuple: {named:?}"
+        );
+    }
+
+    #[test]
     fn a_speakers_reply_lands_in_the_inbox_of_its_channel() {
         let (mut inbox, mut threads,root) = two_channels("two-reply");
         let event = reply("C1", "U1", Some(&root), "Use the fine-grained token");
