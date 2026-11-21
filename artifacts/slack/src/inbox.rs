@@ -748,6 +748,21 @@ mod tests {
     }
 
     #[test]
+    fn bytes_kept_before_stay_when_the_index_cannot_name_them_again() {
+        let (mut inbox, mut threads, dir) = fixme_takes_pngs("file-index-fails-kept");
+        threads.transport_mut().serve_file(SHOT, PNG);
+        files_of(inbox.deliver_to(post_with("Ev1", "C2", &[(10, SHOT)]), &mut threads).unwrap());
+        fs::write(dir.join("files/fixme.tsv"), "not an index line\n").unwrap();
+        let mut second = post_with("Ev2", "C2", &[(10, SHOT)]);
+        if let Event::Message { ts, .. } = &mut second {
+            *ts = "1700000300.000100".to_owned();
+        }
+        let files = files_of(inbox.deliver_to(second, &mut threads).unwrap());
+        assert_eq!(files, vec!["file-unavailable".to_owned()]);
+        assert_eq!(objects_in(&dir).len(), 1, "bytes stored before this take are not its to remove");
+    }
+
+    #[test]
     fn a_speakers_reply_lands_in_the_inbox_of_its_channel() {
         let (mut inbox, mut threads,root) = two_channels("two-reply");
         let event = reply("C1", "U1", Some(&root), "Use the fine-grained token");

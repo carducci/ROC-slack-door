@@ -10,6 +10,8 @@
 
 use std::io;
 
+use ikigai_core::ContentId;
+
 use crate::{sniff, FileEntry, Files, Objects, SlackFile, SlackTransport};
 
 /// The channel lists no file types.
@@ -80,11 +82,18 @@ fn keep(
     content_type: &str,
     bytes: &[u8],
 ) -> io::Result<String> {
+    let stored_before = objects.path(&ContentId::of(bytes)).is_file();
     let id = objects.put(bytes)?;
     // The index names the file by Slack's id for it, with anything but letters and digits
     // dropped, so nothing Slack sent can break an index line.
     let slack_id = file.id.chars().filter(char::is_ascii_alphanumeric).collect();
     let entry = FileEntry { id: id.clone(), content_type: content_type.to_owned(), name: slack_id };
-    files.add(channel, entry)?;
+    // Bytes this take stored but no index names are removed again, so none outlive the
+    // retention chore, which finds an object only through a name. Bytes stored before stay.
+    files.add(channel, entry).inspect_err(|_| {
+        if !stored_before {
+            let _ = objects.remove(&id);
+        }
+    })?;
     Ok(format!("urn:slack:channel:{channel}:file:{id}"))
 }
