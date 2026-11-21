@@ -15,7 +15,7 @@ use ikigai_core::{
 };
 use roc_slack_door::{
     check_channel, check_file, descriptions, read_file, require, to_json, FileError, Files, Objects,
-    Refusal, SlackTransport, ThreadError, Threads, FILE_READ, READ,
+    Refusal, SlackTransport, ThreadError, Threads, FILE_DELETE, FILE_READ, READ,
 };
 
 use roc_slack_door::Delivery;
@@ -291,16 +291,25 @@ impl Endpoint for FileEndpoint {
         let name = self.channel.as_str();
         check_channel(&self.declared, name)
             .map_err(|refusal| to_error(ThreadError::Refused(refusal)))?;
-        if inv.request.verb != Verb::Source {
-            return Err(Error::Endpoint(format!(
-                "urn:slack:channel:{{name}}:file takes source, not {:?}",
-                inv.request.verb
-            )));
-        }
-        require(inv.capability, name, FILE_READ)
+        let action = match inv.request.verb {
+            Verb::Source => FILE_READ,
+            Verb::Delete => FILE_DELETE,
+            other => {
+                return Err(Error::Endpoint(format!(
+                    "urn:slack:channel:{{name}}:file takes source and delete, not {other:?}"
+                )))
+            }
+        };
+        require(inv.capability, name, action)
             .map_err(|refusal| to_error(ThreadError::Refused(refusal)))?;
         let id = check_file(inv.bindings.get("id").unwrap_or_default())
             .map_err(|refusal| to_error(ThreadError::Refused(refusal)))?;
+        if inv.request.verb == Verb::Delete {
+            return match self.files.delete(&self.objects, name, &id) {
+                Ok(_) => Ok(ok_text("deleted")),
+                Err(why) => Err(Error::Endpoint(format!("the file store: {why}"))),
+            };
+        }
         match read_file(&self.files, &self.objects, name, &id) {
             Ok((media_type, bytes)) => Ok(Representation::new(ReprType::new(media_type), bytes).cacheable()),
             Err(FileError::Refused(refusal)) => Err(to_error(ThreadError::Refused(refusal))),
