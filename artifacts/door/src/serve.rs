@@ -13,7 +13,10 @@ use ikigai_core::{
     ArgRef, Capability, Description, Endpoint, EndpointSpace, Error, Fallback, Invocation, Iri,
     Kernel, Representation, Request, Result, ReprType, Space, UriTemplate, Verb,
 };
-use roc_slack_door::{check_channel, descriptions, require, to_json, Refusal, SlackTransport, ThreadError, Threads, READ};
+use roc_slack_door::{
+    check_channel, check_file, descriptions, read_file, require, to_json, FileError, Files, Objects,
+    Refusal, SlackTransport, ThreadError, Threads, FILE_READ, READ,
+};
 
 use roc_slack_door::Delivery;
 
@@ -49,6 +52,13 @@ fn to_error(error: ThreadError) -> Error {
                 "{}: `{name}` is not a channel this door serves",
                 refusal.code()
             ))
+        }
+        ThreadError::Refused(Refusal::BadFile) => Error::InvalidArgument {
+            name: "file".to_owned(),
+            detail: "bad-file: a file address is `b3:` and 64 lowercase hex digits".to_owned(),
+        },
+        ThreadError::Refused(Refusal::NoFile) => {
+            Error::NotFound("no-file: this channel never received that file".to_owned())
         }
         ThreadError::Refused(Refusal::NotGranted(scope)) => {
             Error::Denied(format!("not-granted: this call needs `{scope}`"))
@@ -257,6 +267,50 @@ impl Endpoint for InboxEndpoint {
     }
 }
 
+/// `urn:slack:channel:{name}:file:{id}`, where `id` is `b3:{hex}`: only Source is served. It needs
+/// the channel's `file:read`, and answers the stored bytes under the media type the index holds,
+/// permanently cacheable because the address is the bytes' digest. A name this channel's index
+/// lacks is `no-file`, even when another channel holds the same bytes.
+pub struct FileEndpoint {
+    files: Files,
+    objects: Objects,
+    declared: Vec<String>,
+    /// The declared channel this binding is bound under by its literal name.
+    channel: String,
+}
+
+#[async_trait]
+impl Endpoint for FileEndpoint {
+    async fn invoke(&self, inv: &Invocation<'_>) -> Result<Representation> {
+        let name = self.channel.as_str();
+        check_channel(&self.declared, name)
+            .map_err(|refusal| to_error(ThreadError::Refused(refusal)))?;
+        if inv.request.verb != Verb::Source {
+            return Err(Error::Endpoint(format!(
+                "urn:slack:channel:{{name}}:file takes source, not {:?}",
+                inv.request.verb
+            )));
+        }
+        require(inv.capability, name, FILE_READ)
+            .map_err(|refusal| to_error(ThreadError::Refused(refusal)))?;
+        let id = check_file(inv.bindings.get("id").unwrap_or_default())
+            .map_err(|refusal| to_error(ThreadError::Refused(refusal)))?;
+        match read_file(&self.files, &self.objects, name, &id) {
+            Ok((media_type, bytes)) => Ok(Representation::new(ReprType::new(media_type), bytes).cacheable()),
+            Err(FileError::Refused(refusal)) => Err(to_error(ThreadError::Refused(refusal))),
+            Err(FileError::State(why)) => Err(Error::Endpoint(format!("the file store: {why}"))),
+        }
+    }
+
+    fn name(&self) -> &str {
+        "urn:slack:channel:file"
+    }
+
+    fn describe(&self) -> Description {
+        described("slack-channel-file", "urn:slack:channel:{name}:file:b3:{hex}")
+    }
+}
+
 /// The Slack resources, bound per declared channel. The reaction template is bound before the
 /// thread's: its final variable would otherwise take the whole reaction IRI as a key. The inbox
 /// template is bound after the thread and reaction templates, so an address ending in `:inbox`
@@ -267,6 +321,8 @@ pub fn slack_space<T: SlackTransport + Send + 'static>(
     root: std::path::PathBuf,
 ) -> EndpointSpace {
     let mut space = EndpointSpace::new();
+    // The spaces directory sits in the state directory, beside `files/` and `objects/`.
+    let state = root.parent().unwrap_or(&root);
     // Every channel's addresses are bound by its literal name, never a `{name}` variable: an
     // address under an undeclared channel then matches only the catch-all, which describes no verbs
     // and refuses as `no-channel`. A variable at the end of the channel's own address would also
@@ -304,6 +360,15 @@ pub fn slack_space<T: SlackTransport + Send + 'static>(
                 UriTemplate::parse(&format!("urn:slack:channel:{channel}:inbox")).expect("a declared channel"),
                 InboxEndpoint {
                     spaces: intray(root.clone()),
+                    declared: declared.clone(),
+                    channel: channel.clone(),
+                },
+            )
+            .bind(
+                UriTemplate::parse(&format!("urn:slack:channel:{channel}:file:{{id}}")).expect("a declared channel"),
+                FileEndpoint {
+                    files: Files::open(state).expect("the file index opens under the state directory"),
+                    objects: Objects::open(state).expect("the object store opens under the state directory"),
                     declared: declared.clone(),
                     channel: channel.clone(),
                 },
