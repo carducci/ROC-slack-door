@@ -8,11 +8,10 @@ What the door reads from its host, what it refuses to do without, and which capa
 
 ### Requirement: The host configures the door
 
-The door SHALL take its bot token, its app-level token, the channel, the allowed people, its
-state directory and the inbox space's name from the host (a configuration file the host names,
-with environment variables overriding it), and MUST refuse to start, naming what is missing,
-when any of them is absent. The library crate MUST NOT read the environment or any file for
-them: the door passes them in.
+The door SHALL take its bot token, its app-level token, its state directory and its channels
+from the host (a configuration file the host names, with environment variables overriding it),
+and MUST refuse to start, naming what is missing, when any of them is absent. The library crate
+MUST NOT read the environment or any file for them: the door passes them in.
 
 #### Scenario: A missing token stops the start
 
@@ -26,19 +25,31 @@ door produces.
 
 #### Scenario: Describing a thread
 
-- **WHEN** a caller asks for the description of `urn:slack:thread:carducci-54`
+- **WHEN** a caller asks for the description of `urn:slack:channel:gonk-chat:thread:carducci-54`
 - **THEN** the answer contains neither token
+
+#### Scenario: Describing a channel, a reaction and an inbox
+
+- **WHEN** a caller asks for the description of `urn:slack:channel:gonk-chat`, of `urn:slack:channel:gonk-chat:thread:carducci-54:reaction:tada` and of `urn:slack:channel:gonk-chat:inbox`
+- **THEN** each answer describes that resource and contains neither token
 
 ### Requirement: Capabilities gate the verbs
 
-Reading a thread SHALL require `urn:cap:slack:read`, posting `urn:cap:slack:post`, and adding or
-removing a reaction `urn:cap:slack:react`. A request without the capability MUST be refused
-before Slack is called.
+Each verb SHALL require a capability scoped to the channel it acts in:
+`urn:cap:slack:channel:{name}:read` to read a thread or the inbox, `…:post` to write to the
+channel or a thread, and `…:react` to add or remove a reaction. A request without the
+capability MUST be refused before Slack is called. A capability for one channel MUST NOT
+admit a request in another.
 
 #### Scenario: Posting without the capability
 
-- **WHEN** a caller holding only `urn:cap:slack:read` writes to an open thread
-- **THEN** it is refused for lack of `urn:cap:slack:post`, and nothing is posted
+- **WHEN** a caller holding only `urn:cap:slack:channel:gonk-chat:read` writes to an open thread in `gonk-chat`
+- **THEN** it is refused for lack of `urn:cap:slack:channel:gonk-chat:post`, and nothing is posted
+
+#### Scenario: A capability for another channel
+
+- **WHEN** a caller holding only `urn:cap:slack:channel:gonk-chat:post` writes to `urn:slack:channel:fixme:thread:fixme-1`
+- **THEN** it is refused for lack of `urn:cap:slack:channel:fixme:post`, and nothing is posted
 
 ### Requirement: Slack's transient failures are unavailable, not errors
 
@@ -50,3 +61,47 @@ missing permission SHALL be answered as an error naming it.
 
 - **WHEN** Slack answers a post with a rate limit and a retry-after of 30 seconds
 - **THEN** the write is answered as unavailable with a retry-after of 30 seconds
+
+### Requirement: The host declares the channels
+
+The configuration SHALL list the channels the door serves, each by a name of its own (1 to 40
+lowercase letters, digits and `-`, starting with a lowercase letter or digit, because a
+capability scope that starts with `-` is an exclusion nobody holds) with its Slack channel id and the Slack user ids of its
+speakers. The door MUST refuse to start when no channel is declared, when a name is invalid or
+declared twice, or when a channel has no id or no speakers, naming the channel. It MUST refuse to
+start when a channel's id is not a Slack channel id. The value is first trimmed of leading and
+trailing white space (space, tab, no-break space and the rest of Unicode white space); what
+remains MUST be one or more upper-case letters and digits, and nothing else (so no empty id, and
+no space, tab, newline, other control character, no-break or zero-width character, punctuation or
+lower-case letter inside it), naming the channel and its setting. A name that is not declared SHALL be refused as `no-channel`, without calling
+Slack.
+
+#### Scenario: Two channels
+
+- **WHEN** the host declares `gonk-chat` with speaker `U1` and `fixme` with speaker `U2`
+- **THEN** the door serves `urn:slack:channel:gonk-chat` and `urn:slack:channel:fixme`, and no other channel
+
+#### Scenario: A channel with no speakers stops the start
+
+- **WHEN** the host declares `fixme` with an id and no speakers
+- **THEN** the door refuses to start, naming `fixme`
+
+#### Scenario: A channel id that is not a Slack channel id stops the start
+
+- **WHEN** the host declares `fixme` with an id that, once trimmed of leading and trailing white space, holds a space, a tab, a newline, a no-break or zero-width character, punctuation or a lower-case letter inside it, or is empty
+- **THEN** the door refuses to start, naming `fixme` and `SLACK_CHANNEL_FIXME_ID`, and nothing is posted
+
+#### Scenario: A Slack channel id starts
+
+- **WHEN** the host declares `fixme` with the id `C0123ABCD`
+- **THEN** the door starts, and the channel is served under `fixme`
+
+#### Scenario: An undeclared channel
+
+- **WHEN** a caller writes to `urn:slack:channel:random:thread:x`
+- **THEN** it is refused as `no-channel`, and nothing is posted
+
+#### Scenario: A channel name starting with a dash stops the start
+
+- **WHEN** the host declares a channel named `-ops`
+- **THEN** the door refuses to start, naming `-ops` and `SLACK_CHANNELS`

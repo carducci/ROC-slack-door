@@ -12,7 +12,7 @@ from pathlib import Path
 
 ROOT = Path(__file__).resolve().parent.parent
 
-PROPOSAL = "openspec/changes/channel-resources/proposal.md"
+PROPOSAL = "openspec/changes/archive/2026-11-21-channel-resources/proposal.md"
 
 
 def missing_map_parts(text: str) -> list[str]:
