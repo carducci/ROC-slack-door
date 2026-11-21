@@ -20,12 +20,14 @@ mod conversation;
 mod files;
 mod inbox;
 mod objects;
+mod sniff;
 mod threads;
 
 pub use conversation::{to_json, Entry};
 pub use files::{FileEntry, Files};
 pub use inbox::{Delivery, Inbox};
 pub use objects::Objects;
+pub use sniff::{sniff, SNIFFABLE};
 pub use threads::{is_slack_channel_id, Thread, ThreadError, Threads};
 
 /// What the door asks of Slack. The real implementation speaks the Web API and Socket Mode;
