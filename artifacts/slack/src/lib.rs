@@ -19,6 +19,7 @@ use ikigai_core::Capability;
 mod conversation;
 mod files;
 mod inbox;
+mod intake;
 mod objects;
 mod sniff;
 mod threads;
@@ -26,6 +27,9 @@ mod threads;
 pub use conversation::{to_json, Entry};
 pub use files::{FileEntry, Files};
 pub use inbox::{Delivery, Inbox};
+pub use intake::{
+    Accepts, FILES_NOT_ACCEPTED, FILE_TOO_LARGE, FILE_TYPE_REFUSED, FILE_UNAVAILABLE,
+};
 pub use objects::Objects;
 pub use sniff::{sniff, SNIFFABLE};
 pub use threads::{is_slack_channel_id, Thread, ThreadError, Threads};
