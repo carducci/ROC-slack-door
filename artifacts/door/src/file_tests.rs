@@ -65,9 +65,44 @@ fn reading_a_file_needs_file_read_and_nothing_else_admits_it() {
     }
 }
 
+fn delete(kernel: &Kernel, iri: &str, scopes: &[(&str, &str)]) -> Result<Representation> {
+    let capability = Capability::scoped(scopes.iter().map(|(n, a)| scope(n, a)));
+    let request = Request::new(Verb::Delete, Iri::parse(iri).unwrap());
+    futures_executor::block_on(kernel.issue(request, &capability))
+}
+
+#[test]
+fn deleting_a_file_needs_file_delete_and_nothing_else_admits_it() {
+    let (kernel, id) = door_with_file("delcap");
+    let iri = format!("urn:slack:channel:fixme:file:{id}");
+    for held in [("fixme", "file:read"), ("fixme", "read"), ("fixme", "post"), ("fixme", "react"), ("gonk-chat", "file:delete")] {
+        let err = delete(&kernel, &iri, &[held]);
+        assert!(matches!(err, Err(Error::Denied(_))), "{held:?}: {err:?}");
+    }
+    delete(&kernel, &iri, &[("fixme", "file:delete")]).unwrap();
+    let gone = source(&kernel, &iri, &[("fixme", "file:read")]);
+    assert!(matches!(&gone, Err(Error::NotFound(m)) if m.starts_with("no-file")), "{gone:?}");
+}
+
+#[test]
+fn file_delete_does_not_admit_reading_posting_or_the_inbox() {
+    let (kernel, id) = door_with_file("delonly");
+    let held = [("fixme", "file:delete")];
+    let err = source(&kernel, &format!("urn:slack:channel:fixme:file:{id}"), &held);
+    assert!(matches!(err, Err(Error::Denied(_))), "{err:?}");
+    let err = source(&kernel, "urn:slack:channel:fixme:inbox", &held);
+    assert!(matches!(err, Err(Error::Denied(_))), "{err:?}");
+}
+
 #[test]
 fn the_file_resource_is_described() {
     let described = descriptions();
     let meta = described.iter().find(|m| m.resource.ends_with(":file:b3:{hex}")).unwrap();
-    assert_eq!(meta.verbs, vec![("source", "urn:cap:slack:channel:{name}:file:read")]);
+    assert_eq!(
+        meta.verbs,
+        vec![
+            ("source", "urn:cap:slack:channel:{name}:file:read"),
+            ("delete", "urn:cap:slack:channel:{name}:file:delete"),
+        ]
+    );
 }
