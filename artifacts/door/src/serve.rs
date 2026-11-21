@@ -204,6 +204,12 @@ impl<T: SlackTransport + Send + 'static> Endpoint for ChannelEndpoint<T> {
         if rest.split(':').skip(1).eq(["thread", ""]) {
             return Err(to_error(ThreadError::Refused(Refusal::BadKey)));
         }
+        if rest.split(':').skip(1).eq(["file", ""]) {
+            // `{id}` matches nothing empty, so a file address with no id lands here.
+            return Err(check_file("").map_or_else(|refusal| to_error(ThreadError::Refused(refusal)), |_| {
+                Error::NotFound(format!("`{rest}` is not served yet"))
+            }));
+        }
         Err(Error::NotFound(format!("`{rest}` is not served yet")))
     }
 
