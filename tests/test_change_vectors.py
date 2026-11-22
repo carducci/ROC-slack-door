@@ -1,6 +1,6 @@
 """A change whose vectors task is done has a vector for every scenario it adds or modifies.
 
-`openspec/changes/channel-resources/tasks.md` 5.1 says: update `openspec/vectors.json` for every
+`openspec/changes/archive/2026-11-21-channel-resources/tasks.md` 5.1 says: update `openspec/vectors.json` for every
 changed and new scenario. Once that box is checked, every `#### Scenario:` under the change's
 `## ADDED` and `## MODIFIED Requirements` has one entry in the vectors, so archiving the change
 (5.3) leaves no scenario in `openspec/specs/` without one.

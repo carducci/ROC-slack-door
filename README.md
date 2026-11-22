@@ -27,13 +27,13 @@ Three capabilities gate the verbs, each scoped to the channel it acts in:
 and `urn:cap:slack:channel:{name}:react`. A host can let one caller read and another post, and
 let a caller post in one channel and not in another.
 
-The specs say exactly what each resource does. While the
-[`channel-resources`](openspec/changes/channel-resources/proposal.md) change is in flight they are its deltas:
-[threads](openspec/changes/channel-resources/specs/threads/spec.md),
-[reactions](openspec/changes/channel-resources/specs/reactions/spec.md),
-[inbox](openspec/changes/channel-resources/specs/inbox/spec.md), and
-[configuration](openspec/changes/channel-resources/specs/configuration/spec.md).
-Once it is archived (task 5.3) they are the same four under `openspec/specs/`.
+The specs say exactly what each resource does:
+[threads](openspec/specs/threads/spec.md),
+[reactions](openspec/specs/reactions/spec.md),
+[inbox](openspec/specs/inbox/spec.md), and
+[configuration](openspec/specs/configuration/spec.md).
+The [`channel-resources`](openspec/changes/archive/2026-11-21-channel-resources/proposal.md) change
+that wrote them is archived.
 
 ## Two pieces
 

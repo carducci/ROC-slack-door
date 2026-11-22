@@ -1,6 +1,6 @@
 """Review of PR 112 (ledger item 59, task 5.1): a vector runs the scenario it is named for.
 
-`openspec/changes/channel-resources/specs/inbox/spec.md`, "David starts a conversation":
+`openspec/specs/inbox/spec.md`, "David starts a conversation":
 WHEN `U2`, a speaker of `fixme`, posts a new message, THEN its tuple is in
 `urn:slack:channel:fixme:inbox`, and writing to that key in `fixme` replies under it. Task 5.1
 updates the vectors for every changed and new scenario, but this one still feeds `U1` in

@@ -6,8 +6,7 @@
 //! under a key the door mints.
 //! Everything Slack-specific sits behind a `SlackTransport`, so every scenario in
 //! `openspec/` runs against a fake with no network. What each resource does is specified in
-//! `openspec/changes/channel-resources/specs/` while that change is in flight, and in
-//! `openspec/specs/` once it is archived (task 5.3 of the change).
+//! `openspec/specs/`.
 //!
 //! The transport, its in-memory fake, the thread and reaction resources and the inbox are in
 //! place.
