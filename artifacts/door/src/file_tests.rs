@@ -85,6 +85,15 @@ fn deleting_a_file_needs_file_delete_and_nothing_else_admits_it() {
 }
 
 #[test]
+fn retention_with_only_file_delete_removes_a_screenshot_and_reading_it_is_no_file() {
+    let (kernel, id) = door_with_file("retention");
+    let iri = format!("urn:slack:channel:fixme:file:{id}");
+    delete(&kernel, &iri, &[("fixme", "file:delete")]).unwrap();
+    let gone = source(&kernel, &iri, &[("fixme", "file:read")]);
+    assert!(matches!(&gone, Err(Error::NotFound(m)) if m.starts_with("no-file")), "{gone:?}");
+}
+
+#[test]
 fn file_delete_does_not_admit_reading_posting_or_the_inbox() {
     let (kernel, id) = door_with_file("delonly");
     let held = [("fixme", "file:delete")];
