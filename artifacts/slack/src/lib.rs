@@ -188,6 +188,8 @@ pub const REACT: &str = "react";
 
 /// The action that reads a file a channel received.
 pub const FILE_READ: &str = "file:read";
+/// The action that deletes a file a channel received.
+pub const FILE_DELETE: &str = "file:delete";
 
 /// The capability that lets a caller `action` (`READ`, `POST` or `REACT`) in the channel `name`:
 /// `urn:cap:slack:channel:{name}:{action}`.
@@ -345,7 +347,10 @@ pub fn descriptions() -> Vec<Meta> {
                 never one Slack or the sender claimed; the answer never changes, so it may be \
                 cached. A name the channel never received is refused as `no-file`, a malformed \
                 one as `bad-file`.",
-            verbs: vec![("source", "urn:cap:slack:channel:{name}:file:read")],
+            verbs: vec![
+                ("source", "urn:cap:slack:channel:{name}:file:read"),
+                ("delete", "urn:cap:slack:channel:{name}:file:delete"),
+            ],
         },
     ]
 }
