@@ -82,6 +82,10 @@ settings:
 `files:read` lets the door download the files a speaker posts. An app installed before it was
 added needs the scope added and the app reinstalled; the bot token is checked then to still work.
 
+Reading a kept file takes `urn:slack:channel:<name>:file:read`, and deleting one takes
+`urn:slack:channel:<name>:file:delete`; both are separate from the other verbs, so a caller
+holding only one of them cannot do the other.
+
 Install the app to the workspace. Then make a private channel for the door, and invite the bot
 to it (`/invite @<bot name>`).
 
