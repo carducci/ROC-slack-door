@@ -874,7 +874,7 @@
       "door": true,
       "steps": [
         {
-          "door": "deleting_the_only_name_removes_the_object"
+          "door": "retention_with_only_file_delete_removes_a_screenshot_and_reading_it_is_no_file"
         }
       ]
     },
