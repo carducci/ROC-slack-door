@@ -16,7 +16,7 @@ Waits for `channel-resources`: these names sit under `urn:slack:channel:{name}`.
 
 - [x] 3.1 Download with the bot token, capped at the limit plus one byte; sniff; keep or refuse with `file-type-refused`, `file-too-large`, `files-not-accepted` or `file-unavailable`; write the tuple with each file's name or refusal (A file's type comes from its bytes)
 - [x] 3.2 Serve `urn:slack:channel:{name}:file:b3:{hex}`: bytes with the indexed type, cacheable, `no-file` and `bad-file` refusals, with descriptions (`Meta`) (Reading a file returns its bytes)
-- [ ] 3.3 Require `…:file:read` and `…:file:delete`, separate from the other verbs (File capabilities are separate)
+- [x] 3.3 Require `…:file:read` and `…:file:delete`, separate from the other verbs (File capabilities are separate)
 
 ## 4. Vectors, docs and deploy
 
