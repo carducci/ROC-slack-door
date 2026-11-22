@@ -28,7 +28,7 @@ const OTHER_NAME: &str = "fixme";
 const OTHER_CHANNEL: &str = "C2";
 /// How many vectors are for scenarios that read the door's configuration or its kernel, which
 /// the door's own tests cover.
-const DOOR_ONLY: usize = 9;
+const DOOR_ONLY: usize = 19;
 
 fn channels() -> [(String, String); 2] {
     [

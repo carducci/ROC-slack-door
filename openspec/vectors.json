@@ -721,6 +721,96 @@
           ]
         }
       ]
+    },
+    {
+      "id": "urn:openspec:spec:configuration:requirement:a-channel-lists-the-files-it-accepts:scenario:images-only",
+      "door": true,
+      "steps": [
+        {
+          "door": "a_channel_lists_its_file_types_and_limit"
+        }
+      ]
+    },
+    {
+      "id": "urn:openspec:spec:files:requirement:a-speaker-s-post-with-files-lands-in-the-inbox:scenario:a-screenshot-and-a-line",
+      "door": true,
+      "steps": [
+        {
+          "door": "a_screenshot_lands_named_by_its_digest_and_is_kept_with_its_sniffed_type"
+        }
+      ]
+    },
+    {
+      "id": "urn:openspec:spec:files:requirement:a-speaker-s-post-with-files-lands-in-the-inbox:scenario:a-file-in-a-channel-that-takes-none",
+      "door": true,
+      "steps": [
+        {
+          "door": "a_file_in_a_channel_that_takes_none_lands_refused_as_files_not_accepted"
+        }
+      ]
+    },
+    {
+      "id": "urn:openspec:spec:files:requirement:a-file-is-kept-by-its-content:scenario:the-same-screenshot-twice",
+      "door": true,
+      "steps": [
+        {
+          "door": "the_same_screenshot_in_two_posts_is_one_object_under_one_name"
+        }
+      ]
+    },
+    {
+      "id": "urn:openspec:spec:files:requirement:a-file-s-type-comes-from-its-bytes:scenario:a-renamed-executable",
+      "door": true,
+      "steps": [
+        {
+          "door": "a_renamed_executable_is_refused_by_its_bytes_and_nothing_is_stored"
+        }
+      ]
+    },
+    {
+      "id": "urn:openspec:spec:files:requirement:a-file-s-type-comes-from-its-bytes:scenario:too-large",
+      "door": true,
+      "steps": [
+        {
+          "door": "a_file_slack_reports_too_large_is_refused_without_a_download"
+        }
+      ]
+    },
+    {
+      "id": "urn:openspec:spec:files:requirement:reading-a-file-returns-its-bytes:scenario:reading-the-screenshot",
+      "door": true,
+      "steps": [
+        {
+          "door": "a_file_is_read_as_its_bytes_with_the_indexed_type_and_cacheable"
+        }
+      ]
+    },
+    {
+      "id": "urn:openspec:spec:files:requirement:reading-a-file-returns-its-bytes:scenario:the-same-bytes-another-channel",
+      "door": true,
+      "steps": [
+        {
+          "door": "the_same_bytes_in_another_channel_are_no_file"
+        }
+      ]
+    },
+    {
+      "id": "urn:openspec:spec:files:requirement:deleting-a-file-removes-its-name:scenario:retention-removes-a-screenshot",
+      "door": true,
+      "steps": [
+        {
+          "door": "deleting_the_only_name_removes_the_object"
+        }
+      ]
+    },
+    {
+      "id": "urn:openspec:spec:files:requirement:file-capabilities-are-separate:scenario:a-triage-worker-looks-and-can-t-post",
+      "door": true,
+      "steps": [
+        {
+          "door": "a_caller_holding_only_file_read_cannot_post"
+        }
+      ]
     }
   ]
 }
