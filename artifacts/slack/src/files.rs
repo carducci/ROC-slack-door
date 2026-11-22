@@ -127,11 +127,14 @@ impl Files {
         if entries.len() == before {
             return Ok(false);
         }
-        self.save(channel, &entries)?;
         if named_elsewhere {
+            self.save(channel, &entries)?;
             return Ok(false);
         }
+        // The object goes first: a refused remove leaves the name, so a retry finds it and
+        // tries again. A failed save after it leaves a name for no bytes, which a retry drops.
         objects.remove(id)?;
+        self.save(channel, &entries)?;
         Ok(true)
     }
 
