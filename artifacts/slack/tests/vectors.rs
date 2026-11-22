@@ -1,8 +1,8 @@
 //! Runs every scenario vector in `openspec/vectors.json` against the library and its fake.
 //!
 //! A vector is a list of steps, run in order against a fresh door. A step either acts (`write`,
-//! `read`, `react`, `feed`, `fail_next`, `restart`) or checks (`inbox`, `posts`, `reactions`,
-//! `describe`). An `expect` is the outcome a call should have: `"ok"`, a refusal's code such as
+//! `read`, `react`, `feed`, `accept`, `serve`, `fail_next`, `restart`) or checks (`inbox`, `posts`,
+//! `reactions`, `downloads`, `stored`, `describe`). An `expect` is the outcome a call should have: `"ok"`, a refusal's code such as
 //! `"bad-key"`, or `"unavailable"` / `"unavailable:<seconds>"`. In an expected message or
 //! delivery only the fields written are compared; `"$root"` stands for the opening message's
 //! timestamp the vector has seen. A vector for a scenario the library cannot reach (it reads
@@ -13,8 +13,8 @@ use std::fs;
 use std::path::{Path, PathBuf};
 
 use roc_slack_door::{
-    descriptions, scope, to_json, Delivery, Event, FakeSlack, Inbox, SlackTransport, ThreadError,
-    Threads, TransportError, POST, READ, REACT,
+    descriptions, scope, to_json, Accepts, Delivery, Event, FakeSlack, Inbox, SlackFile,
+    SlackTransport, ThreadError, Threads, TransportError, POST, READ, REACT,
 };
 use ikigai_core::Capability;
 use serde_json::{json, Value};
@@ -28,7 +28,10 @@ const OTHER_NAME: &str = "fixme";
 const OTHER_CHANNEL: &str = "C2";
 /// How many vectors are for scenarios that read the door's configuration or its kernel, which
 /// the door's own tests cover.
-const DOOR_ONLY: usize = 19;
+const DOOR_ONLY: usize = 14;
+/// The bytes a vector's `serve` names: a PNG screenshot, and a Windows executable.
+const PNG: &[u8] = b"\x89PNG\r\n\x1a\n\0\0\0\rIHDR a screenshot";
+const EXE: &[u8] = b"MZ\x90\0\x03\0\0\0 a Windows executable";
 
 fn channels() -> [(String, String); 2] {
     [
@@ -83,6 +86,10 @@ impl World {
     fn resolve(&self, expected: &Value) -> Value {
         match expected {
             Value::String(s) if s == "$root" => json!(self.root.clone().unwrap_or_default()),
+            // `$png` stands for the PNG's content address, `b3:` and its digest.
+            Value::String(s) if s.contains("$png") => {
+                json!(s.replace("$png", &ikigai_core::ContentId::of(PNG).to_string()))
+            }
             Value::Object(map) => Value::Object(
                 map.iter().map(|(k, v)| (k.clone(), self.resolve(v))).collect(),
             ),
@@ -166,12 +173,22 @@ fn delivery_json(channel: &str, delivery: &Delivery) -> Value {
             user,
             time,
             text,
-            ..
-        } => json!({ "key": key, "user": user, "time": time, "text": text }),
+            files,
+        } => json!({ "key": key, "user": user, "time": time, "text": text, "files": files }),
         Delivery::Reaction { key, user, name } => json!({ "key": key, "user": user, "reaction": name }),
     };
     json["channel"] = json!(channel);
     json
+}
+
+/// How many objects the store holds: the files under `dir`, at any depth.
+fn stored_objects(dir: &Path) -> usize {
+    fs::read_dir(dir)
+        .into_iter()
+        .flatten()
+        .flatten()
+        .map(|entry| if entry.path().is_dir() { stored_objects(&entry.path()) } else { 1 })
+        .sum()
 }
 
 fn run_step(world: &mut World, step: &Value) -> Result<(), String> {
@@ -268,7 +285,17 @@ fn run_step(world: &mut World, step: &Value) -> Result<(), String> {
                     ts: format!("1700000{:03}.000001", 100 + n),
                     thread,
                     text: message["text"].as_str().unwrap_or_default().to_owned(),
-                    files: Vec::new(),
+                    files: message
+                        .get("files")
+                        .and_then(Value::as_array)
+                        .into_iter()
+                        .flatten()
+                        .map(|file| SlackFile {
+                            id: "F0SHOT0001".to_owned(),
+                            size: file["size"].as_u64().unwrap_or_default(),
+                            url_private: file["url"].as_str().unwrap_or_default().to_owned(),
+                        })
+                        .collect(),
                 }
             } else {
                 let reaction = &args["reaction"];
@@ -296,6 +323,37 @@ fn run_step(world: &mut World, step: &Value) -> Result<(), String> {
                 }
             }
             expect_list("inbox", &deliveries, &world.resolve(args))
+        }
+        "accept" => {
+            let types = args["types"].as_array().unwrap().iter().map(|t| t.as_str().unwrap().to_owned());
+            let accepts = Accepts { types: types.collect(), max_bytes: args["max_bytes"].as_u64().unwrap() };
+            world.inbox.accept_files(args["channel"].as_str().unwrap(), accepts);
+            Ok(())
+        }
+        "serve" => {
+            let bytes = match args["bytes"].as_str().unwrap_or_default() {
+                "png" => PNG,
+                "exe" => EXE,
+                other => return Err(format!("unknown bytes {other:?}")),
+            };
+            world.threads.transport_mut().serve_file(args["url"].as_str().unwrap(), bytes);
+            Ok(())
+        }
+        "downloads" => {
+            let count = world.threads.transport().downloads().len();
+            if Some(count as u64) == args.as_u64() {
+                Ok(())
+            } else {
+                Err(format!("downloads: expected {args}, got {count}"))
+            }
+        }
+        "stored" => {
+            let count = stored_objects(&world.dir.join("objects"));
+            if Some(count as u64) == args.as_u64() {
+                Ok(())
+            } else {
+                Err(format!("stored: expected {args} object(s), got {count}"))
+            }
         }
         "posts" => {
             let posts: Vec<Value> = world
