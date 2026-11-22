@@ -111,10 +111,9 @@ impl Files {
     }
 
     /// Remove `channel`'s name for `id`, and the object too once no channel names it. A name
-    /// that is not there leaves every index as it is, but still removes the object when no
-    /// channel names it, so a delete that failed part way can be retried. Every index is read
-    /// before one is written, so a failed read changes nothing. Returns whether the object was
-    /// removed.
+    /// that is not there changes nothing, the object included. Every index is read before one
+    /// is written, so a failed read changes nothing and a retry can finish. Returns whether the
+    /// object was removed.
     pub fn delete(&self, objects: &Objects, channel: &str, id: &ContentId) -> io::Result<bool> {
         let mut entries = self.load(channel)?;
         let mut named_elsewhere = false;
@@ -125,9 +124,10 @@ impl Files {
         }
         let before = entries.len();
         entries.retain(|e| &e.id != id);
-        if entries.len() != before {
-            self.save(channel, &entries)?;
+        if entries.len() == before {
+            return Ok(false);
         }
+        self.save(channel, &entries)?;
         if named_elsewhere {
             return Ok(false);
         }

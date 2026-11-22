@@ -277,7 +277,10 @@ impl Endpoint for InboxEndpoint {
 /// the channel's `file:read`, and answers the stored bytes under the media type the index holds,
 /// permanently cacheable because the address is the bytes' digest. A name this channel's index
 /// lacks is `no-file`, even when another channel holds the same bytes.
-pub struct FileEndpoint {
+pub struct FileEndpoint<T: SlackTransport> {
+    /// Intake keeps a file while it holds this lock; a delete takes it too, so it cannot land
+    /// between the bytes being kept and named.
+    threads: Shared<T>,
     files: Files,
     objects: Objects,
     declared: Vec<String>,
@@ -286,7 +289,7 @@ pub struct FileEndpoint {
 }
 
 #[async_trait]
-impl Endpoint for FileEndpoint {
+impl<T: SlackTransport + Send + 'static> Endpoint for FileEndpoint<T> {
     async fn invoke(&self, inv: &Invocation<'_>) -> Result<Representation> {
         let name = self.channel.as_str();
         check_channel(&self.declared, name)
@@ -305,6 +308,7 @@ impl Endpoint for FileEndpoint {
         let id = check_file(inv.bindings.get("id").unwrap_or_default())
             .map_err(|refusal| to_error(ThreadError::Refused(refusal)))?;
         if inv.request.verb == Verb::Delete {
+            let _intake = self.threads.lock().map_err(|_| Error::Endpoint("the thread map is poisoned".to_owned()))?;
             return match self.files.delete(&self.objects, name, &id) {
                 Ok(_) => Ok(ok_text("deleted")),
                 Err(why) => Err(Error::Endpoint(format!("the file store: {why}"))),
@@ -382,6 +386,7 @@ pub fn slack_space<T: SlackTransport + Send + 'static>(
             .bind(
                 UriTemplate::parse(&format!("urn:slack:channel:{channel}:file:{{id}}")).expect("a declared channel"),
                 FileEndpoint {
+                    threads: Arc::clone(&threads),
                     files: Files::open(state).expect("the file index opens under the state directory"),
                     objects: Objects::open(state).expect("the object store opens under the state directory"),
                     declared: declared.clone(),
