@@ -243,6 +243,36 @@ mod tests {
     }
 
     #[test]
+    fn an_executable_a_file_share_claims_is_a_png_is_refused_by_its_bytes() {
+        // The recorded event says `image/png`; the bytes Slack serves are an ELF header.
+        // The door trusts the bytes, never the claimed type (design: type spoofing).
+        use roc_slack_door::{Accepts, Delivery, FakeSlack, Inbox, Threads};
+        let payload: Value = serde_json::from_str(include_str!("../fixtures/file_share.json"))
+            .expect("the recorded event is JSON");
+        let Some(event @ Event::Message { .. }) = event_from(&payload) else {
+            panic!("the file_share message was not heard");
+        };
+        let Event::Message { files, .. } = &event else { unreachable!() };
+        let elf: &[u8] = b"\x7fELF\x02\x01\x01\0 an executable";
+        let dir = std::env::temp_dir().join(format!("socket-spoof-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(&dir).unwrap();
+        let named = [("fixme".to_owned(), "C0FIXME001".to_owned())];
+        let mut transport = FakeSlack::new();
+        transport.serve_file(&files[0].url_private, elf);
+        let mut threads = Threads::open_channels(&dir, &named, transport).unwrap();
+        let speaking = [("fixme".to_owned(), "C0FIXME001".to_owned(), vec!["U0DAVID001".to_owned()])];
+        let mut inbox = Inbox::open_channels(&dir, "", &speaking).unwrap();
+        inbox.accept_files("fixme", Accepts { types: vec!["image/png".into()], max_bytes: 100_000 });
+        let delivered = inbox.deliver_to(event, &mut threads).unwrap();
+        let Some((_, Delivery::Message { files, .. })) = delivered else {
+            panic!("the post did not land: {delivered:?}");
+        };
+        assert_eq!(files, vec!["file-type-refused".to_owned()]);
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
     fn a_reaction_becomes_a_reaction_event_on_the_reacted_message() {
         let payload = json!({
             "event_id": "Ev4",
