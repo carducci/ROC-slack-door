@@ -721,6 +721,171 @@
           ]
         }
       ]
+    },
+    {
+      "id": "urn:openspec:spec:configuration:requirement:a-channel-lists-the-files-it-accepts:scenario:images-only",
+      "door": true,
+      "steps": [
+        {
+          "door": "a_channel_lists_its_file_types_and_limit"
+        }
+      ]
+    },
+    {
+      "id": "urn:openspec:spec:files:requirement:a-speaker-s-post-with-files-lands-in-the-inbox:scenario:a-screenshot-and-a-line",
+      "steps": [
+        { "accept": { "channel": "fixme", "types": ["image/png"], "max_bytes": 100 } },
+        { "serve": { "url": "https://files.slack.com/files-pri/T1-F1/screenshot.png", "bytes": "png" } },
+        {
+          "feed": {
+            "message": {
+              "channel": "fixme",
+              "user": "U2",
+              "text": "cosmetic: the save button overlaps the footer",
+              "files": [{ "size": 10, "url": "https://files.slack.com/files-pri/T1-F1/screenshot.png" }]
+            }
+          }
+        },
+        {
+          "inbox": [
+            {
+              "channel": "fixme",
+              "text": "cosmetic: the save button overlaps the footer",
+              "files": ["urn:slack:channel:fixme:file:$png"]
+            }
+          ]
+        },
+        { "stored": 1 }
+      ]
+    },
+    {
+      "id": "urn:openspec:spec:files:requirement:a-speaker-s-post-with-files-lands-in-the-inbox:scenario:a-file-in-a-channel-that-takes-none",
+      "steps": [
+        { "accept": { "channel": "fixme", "types": ["image/png"], "max_bytes": 100 } },
+        { "serve": { "url": "https://files.slack.com/files-pri/T1-F1/screenshot.png", "bytes": "png" } },
+        {
+          "feed": {
+            "message": {
+              "channel": "gonk-chat",
+              "user": "U1",
+              "text": "a picture",
+              "files": [{ "size": 10, "url": "https://files.slack.com/files-pri/T1-F1/screenshot.png" }]
+            }
+          }
+        },
+        { "inbox": [{ "channel": "gonk-chat", "text": "a picture", "files": ["files-not-accepted"] }] },
+        { "downloads": 0 },
+        { "stored": 0 }
+      ]
+    },
+    {
+      "id": "urn:openspec:spec:files:requirement:a-file-is-kept-by-its-content:scenario:the-same-screenshot-twice",
+      "steps": [
+        { "accept": { "channel": "fixme", "types": ["image/png"], "max_bytes": 100 } },
+        { "serve": { "url": "https://files.slack.com/files-pri/T1-F1/screenshot.png", "bytes": "png" } },
+        {
+          "feed": {
+            "message": {
+              "channel": "fixme",
+              "user": "U2",
+              "text": "first",
+              "files": [{ "size": 10, "url": "https://files.slack.com/files-pri/T1-F1/screenshot.png" }]
+            }
+          }
+        },
+        {
+          "feed": {
+            "message": {
+              "channel": "fixme",
+              "user": "U2",
+              "text": "second",
+              "files": [{ "size": 10, "url": "https://files.slack.com/files-pri/T1-F1/screenshot.png" }]
+            }
+          }
+        },
+        {
+          "inbox": [
+            { "channel": "fixme", "text": "first", "files": ["urn:slack:channel:fixme:file:$png"] },
+            { "channel": "fixme", "text": "second", "files": ["urn:slack:channel:fixme:file:$png"] }
+          ]
+        },
+        { "stored": 1 }
+      ]
+    },
+    {
+      "id": "urn:openspec:spec:files:requirement:a-file-s-type-comes-from-its-bytes:scenario:a-renamed-executable",
+      "steps": [
+        { "accept": { "channel": "fixme", "types": ["image/png"], "max_bytes": 100 } },
+        { "serve": { "url": "https://files.slack.com/files-pri/T1-F1/screenshot.png", "bytes": "exe" } },
+        {
+          "feed": {
+            "message": {
+              "channel": "fixme",
+              "user": "U2",
+              "text": "a screenshot",
+              "files": [{ "size": 10, "url": "https://files.slack.com/files-pri/T1-F1/screenshot.png" }]
+            }
+          }
+        },
+        { "inbox": [{ "channel": "fixme", "text": "a screenshot", "files": ["file-type-refused"] }] },
+        { "stored": 0 }
+      ]
+    },
+    {
+      "id": "urn:openspec:spec:files:requirement:a-file-s-type-comes-from-its-bytes:scenario:too-large",
+      "steps": [
+        { "accept": { "channel": "fixme", "types": ["image/png"], "max_bytes": 100 } },
+        { "serve": { "url": "https://files.slack.com/files-pri/T1-F1/screenshot.png", "bytes": "png" } },
+        {
+          "feed": {
+            "message": {
+              "channel": "fixme",
+              "user": "U2",
+              "text": "a big one",
+              "files": [{ "size": 101, "url": "https://files.slack.com/files-pri/T1-F1/screenshot.png" }]
+            }
+          }
+        },
+        { "inbox": [{ "channel": "fixme", "text": "a big one", "files": ["file-too-large"] }] },
+        { "downloads": 0 },
+        { "stored": 0 }
+      ]
+    },
+    {
+      "id": "urn:openspec:spec:files:requirement:reading-a-file-returns-its-bytes:scenario:reading-the-screenshot",
+      "door": true,
+      "steps": [
+        {
+          "door": "a_file_is_read_as_its_bytes_with_the_indexed_type_and_cacheable"
+        }
+      ]
+    },
+    {
+      "id": "urn:openspec:spec:files:requirement:reading-a-file-returns-its-bytes:scenario:the-same-bytes-another-channel",
+      "door": true,
+      "steps": [
+        {
+          "door": "the_same_bytes_in_another_channel_are_no_file"
+        }
+      ]
+    },
+    {
+      "id": "urn:openspec:spec:files:requirement:deleting-a-file-removes-its-name:scenario:retention-removes-a-screenshot",
+      "door": true,
+      "steps": [
+        {
+          "door": "retention_deletes_a_file_through_the_door_with_only_file_delete"
+        }
+      ]
+    },
+    {
+      "id": "urn:openspec:spec:files:requirement:file-capabilities-are-separate:scenario:a-triage-worker-looks-and-can-t-post",
+      "door": true,
+      "steps": [
+        {
+          "door": "a_caller_holding_only_file_read_cannot_post"
+        }
+      ]
     }
   ]
 }

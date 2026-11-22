@@ -95,6 +95,16 @@ fn file_delete_does_not_admit_reading_posting_or_the_inbox() {
 }
 
 #[test]
+fn a_caller_holding_only_file_read_cannot_post() {
+    let (kernel, _) = door_with_file("triage");
+    let capability = Capability::scoped([scope("fixme", "file:read")]);
+    let request = Request::new(Verb::Sink, Iri::parse("urn:slack:channel:fixme:thread:triage").unwrap())
+        .with_arg("content", ikigai_core::ArgRef::Inline(b"hello".to_vec()));
+    let err = futures_executor::block_on(kernel.issue(request, &capability));
+    assert!(matches!(&err, Err(Error::Denied(m)) if m.contains("urn:cap:slack:channel:fixme:post")), "{err:?}");
+}
+
+#[test]
 fn the_file_resource_is_described() {
     let described = descriptions();
     let meta = described.iter().find(|m| m.resource.ends_with(":file:b3:{hex}")).unwrap();

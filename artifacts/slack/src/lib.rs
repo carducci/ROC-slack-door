@@ -188,7 +188,7 @@ pub const REACT: &str = "react";
 
 /// The action that reads a file a channel received.
 pub const FILE_READ: &str = "file:read";
-/// The action that deletes a file a channel received.
+/// The action that deletes a file a channel received (the retention chore holds only this).
 pub const FILE_DELETE: &str = "file:delete";
 
 /// The capability that lets a caller `action` (`READ`, `POST` or `REACT`) in the channel `name`:

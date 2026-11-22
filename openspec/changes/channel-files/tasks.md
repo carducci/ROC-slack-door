@@ -20,6 +20,6 @@ Waits for `channel-resources`: these names sit under `urn:slack:channel:{name}`.
 
 ## 4. Vectors, docs and deploy
 
-- [ ] 4.1 Vectors for every scenario, the type-spoofing and integrity tests from the design, and the README runbook: `files:read` in the app manifest, a channel's file settings in `door.env`
+- [x] 4.1 Vectors for every scenario, the type-spoofing and integrity tests from the design, and the README runbook: `files:read` in the app manifest, a channel's file settings in `door.env`
 - [ ] 4.2 Human only, Michael as Slack admin and on Tamariz, after `channel-resources` 5.2: add `files:read` to the Slack app and reinstall; create the private channel `#fixme`, invite the bot and David; declare `fixme` in `door.env` with David's Slack user id as its only speaker, images only, 10 MB; restart `roc-slack-door`; post one test screenshot and read it back
 - [ ] 4.3 Archive the change into `openspec/specs/`

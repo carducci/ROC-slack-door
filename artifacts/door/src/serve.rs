@@ -273,8 +273,8 @@ impl Endpoint for InboxEndpoint {
     }
 }
 
-/// `urn:slack:channel:{name}:file:{id}`, where `id` is `b3:{hex}`: only Source is served. It needs
-/// the channel's `file:read`, and answers the stored bytes under the media type the index holds,
+/// `urn:slack:channel:{name}:file:{id}`, where `id` is `b3:{hex}`: Source and Delete are served.
+/// Source needs the channel's `file:read` and Delete its `file:delete`, nothing else. Source answers the stored bytes under the media type the index holds,
 /// permanently cacheable because the address is the bytes' digest. A name this channel's index
 /// lacks is `no-file`, even when another channel holds the same bytes.
 pub struct FileEndpoint<T: SlackTransport> {
@@ -308,6 +308,7 @@ impl<T: SlackTransport + Send + 'static> Endpoint for FileEndpoint<T> {
         let id = check_file(inv.bindings.get("id").unwrap_or_default())
             .map_err(|refusal| to_error(ThreadError::Refused(refusal)))?;
         if inv.request.verb == Verb::Delete {
+            // Deleting a name that isn't there succeeds and changes nothing (spec `files`).
             let _intake = self.threads.lock().map_err(|_| Error::Endpoint("the thread map is poisoned".to_owned()))?;
             return match self.files.delete(&self.objects, name, &id) {
                 Ok(_) => Ok(ok_text("deleted")),
