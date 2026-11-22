@@ -347,7 +347,10 @@ pub fn descriptions() -> Vec<Meta> {
                 never one Slack or the sender claimed; the answer never changes, so it may be \
                 cached. A name the channel never received is refused as `no-file`, a malformed \
                 one as `bad-file`.",
-            verbs: vec![("source", "urn:cap:slack:channel:{name}:file:read")],
+            verbs: vec![
+                ("source", "urn:cap:slack:channel:{name}:file:read"),
+                ("delete", "urn:cap:slack:channel:{name}:file:delete"),
+            ],
         },
     ]
 }
