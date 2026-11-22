@@ -67,6 +67,7 @@ oauth_config:
   scopes:
     bot:
       - chat:write
+      - files:read
       - groups:history
       - reactions:read
       - reactions:write
@@ -77,6 +78,9 @@ settings:
       - reaction_added
   socket_mode_enabled: true
 ```
+
+`files:read` lets the door download the files a speaker posts. An app installed before it was
+added needs the scope added and the app reinstalled; the bot token is checked then to still work.
 
 Install the app to the workspace. Then make a private channel for the door, and invite the bot
 to it (`/invite @<bot name>`).
@@ -103,6 +107,8 @@ SLACK_CHANNEL_GONK_CHAT_ID=C0000000000
 SLACK_CHANNEL_GONK_CHAT_SPEAKERS=U0000000000,U0000000001
 SLACK_CHANNEL_FIXME_ID=C0000000001
 SLACK_CHANNEL_FIXME_SPEAKERS=U0000000002
+SLACK_CHANNEL_FIXME_FILE_TYPES=image/png,image/jpeg,image/gif,image/webp
+SLACK_CHANNEL_FIXME_FILE_MAX_BYTES=10485760
 ROC_STATE_DIR=/home/<you>/.local/state/roc-slack-door
 ```
 
@@ -115,6 +121,15 @@ The door refuses to start and names whatever is missing or wrong: a token, the s
 no channel, a name that is invalid or repeated, a channel with no id or no speakers. It also
 refuses the retired `SLACK_CHANNEL`, `SLACK_ALLOWED_USERS` and `ROC_INBOX_SPACE`, naming what
 replaces each.
+
+A channel accepts no files unless it lists them. `SLACK_CHANNEL_<NAME>_FILE_TYPES` is a comma
+separated list of media types (the door must be able to detect each from a file's bytes:
+`image/png`, `image/jpeg`, `image/gif`, `image/webp`), and `SLACK_CHANNEL_<NAME>_FILE_MAX_BYTES`
+the size limit, a positive number. A list with no limit, or a type the door can't detect, stops the
+start and names the channel. The door decides a file's type from its bytes and ignores the name and
+the type Slack reports; a file of another type, or over the limit, is refused and not stored. Files
+are kept once, by content, under `objects/` in the state directory, and read at
+`urn:slack:channel:<name>:file:b3:<hex>` with `urn:cap:slack:channel:<name>:file:read`.
 
 ### 4. Run it as a user service
 
