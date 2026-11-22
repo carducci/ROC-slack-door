@@ -145,6 +145,11 @@ fn files_of(event: &Value) -> Vec<SlackFile> {
 
 #[cfg(test)]
 mod tests {
+    use ikigai_core::ContentId;
+    use roc_slack_door::{
+        Accepts, Delivery, FakeSlack, Files, Inbox, Objects, Threads, FILE_TYPE_REFUSED,
+    };
+
     use super::*;
 
     #[test]
@@ -240,6 +245,39 @@ mod tests {
                 }],
             })
         );
+    }
+
+    #[test]
+    fn an_executable_claimed_as_a_png_is_refused_by_its_bytes_and_nothing_is_kept() {
+        // Spec `files`: the type is read from the bytes. The recorded event says `image/png`;
+        // Slack serves a Windows executable at its URL; a door that trusted the claim keeps it.
+        const EXE: &[u8] = b"MZ\x90\0\x03\0\0\0 a Windows executable";
+        let payload: Value = serde_json::from_str(include_str!("../fixtures/file_share.json"))
+            .expect("the recorded event is JSON");
+        assert_eq!(payload["event"]["files"][0]["mimetype"], "image/png");
+        let Some(event) = event_from(&payload) else {
+            panic!("the file_share message was not heard");
+        };
+        let Event::Message { files, .. } = &event else { panic!("not a message: {event:?}") };
+        let url = files[0].url_private.clone();
+
+        let dir = std::env::temp_dir().join(format!("roc-door-spoof-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(&dir).unwrap();
+        let named = [("fixme".to_owned(), "C0FIXME001".to_owned())];
+        let mut threads = Threads::open_channels(&dir, &named, FakeSlack::new()).unwrap();
+        threads.transport_mut().serve_file(&url, EXE);
+        let channels = [("fixme".to_owned(), "C0FIXME001".to_owned(), vec!["U0DAVID001".to_owned()])];
+        let mut inbox = Inbox::open_channels(&dir, "UBOT", &channels).unwrap();
+        inbox.accept_files("fixme", Accepts { types: vec!["image/png".to_owned()], max_bytes: 100_000 });
+
+        let delivered = inbox.deliver_to(event, &mut threads).unwrap();
+        let Some((_, Delivery::Message { files, .. })) = delivered else {
+            panic!("the post did not land: {delivered:?}");
+        };
+        assert_eq!(files, vec![FILE_TYPE_REFUSED.to_owned()]);
+        assert!(Files::open(&dir).unwrap().list("fixme").unwrap().is_empty());
+        assert!(Objects::open(&dir).unwrap().get(&ContentId::of(EXE)).unwrap().is_none());
     }
 
     #[test]
