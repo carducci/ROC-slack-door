@@ -8,7 +8,7 @@ use std::fmt;
 use std::path::PathBuf;
 
 // The media types the door can confirm from a file's bytes, the ones its sniffer knows.
-use roc_slack_door::SNIFFABLE;
+use roc_slack_door::{Accepts, SNIFFABLE};
 
 pub const BOT_TOKEN: &str = "SLACK_BOT_TOKEN";
 pub const APP_TOKEN: &str = "SLACK_APP_TOKEN";
@@ -92,6 +92,19 @@ pub fn parse_file(text: &str) -> BTreeMap<String, String> {
 }
 
 impl Config {
+    /// The files each channel accepts, by channel name: only the channels that declare both
+    /// types and a limit. A channel with none is absent, and the inbox refuses its files.
+    pub fn file_accepts(&self) -> Vec<(String, Accepts)> {
+        self.channels
+            .iter()
+            .filter(|c| !c.file_types.is_empty())
+            .filter_map(|c| {
+                let max_bytes = c.file_max_bytes?;
+                Some((c.name.clone(), Accepts { types: c.file_types.clone(), max_bytes }))
+            })
+            .collect()
+    }
+
     /// Resolves the configuration: `env` overrides `file` for each name, and an empty value
     /// counts as absent. Every problem is reported, not just the first.
     pub fn resolve(
@@ -361,6 +374,15 @@ mod tests {
         assert_eq!(config.channels[1].file_types.len(), 4);
         assert_eq!(config.channels[1].file_max_bytes, Some(10_485_760));
         assert!(config.channels[0].file_types.is_empty());
+    }
+
+    #[test]
+    fn a_declared_channel_yields_its_accepts_and_an_undeclared_one_none() {
+        let file = file_with(&format!("{IMAGES}SLACK_CHANNEL_FIXME_FILE_MAX_BYTES=10485760\n"));
+        let accepts = Config::resolve(&file, no_env).unwrap().file_accepts();
+        let types = ["image/png", "image/jpeg", "image/gif", "image/webp"].map(String::from).to_vec();
+        assert_eq!(accepts, vec![("fixme".to_owned(), Accepts { types, max_bytes: 10_485_760 })]);
+        assert!(Config::resolve(&file_with(""), no_env).unwrap().file_accepts().is_empty());
     }
 
     #[test]

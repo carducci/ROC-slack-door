@@ -728,6 +728,9 @@
       "steps": [
         {
           "door": "a_channel_lists_its_file_types_and_limit"
+        },
+        {
+          "door": "a_declared_channel_yields_its_accepts_and_an_undeclared_one_none"
         }
       ]
     },
