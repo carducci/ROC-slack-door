@@ -16,7 +16,9 @@ use std::sync::Arc;
 use std::task::{Context, Poll, Wake, Waker};
 
 use base64::Engine;
-use ikigai_core::{ArgRef, Capability, ContentId, Error, Iri, Kernel, Representation, Request, Verb};
+use ikigai_core::{
+    ArgRef, Body, Capability, ContentId, EndpointSpace, Error, Iri, Kernel, Representation, Request, UriTemplate, Verb,
+};
 
 /// A write-once store of bytes by content.
 pub struct Objects {
@@ -67,7 +69,10 @@ impl Objects {
     pub fn open(state_dir: &Path) -> io::Result<Objects> {
         let root = state_dir.join("objects");
         std::fs::create_dir_all(&root)?;
-        let kernel = Kernel::new(Arc::new(ikigai_fs::space(&root)));
+        // A channel's size limit is the host's, so the store sets no ceiling of its own on a write.
+        let files = ikigai_fs::FileEndpoint::new(&root).max_write(u64::MAX);
+        let grammar = UriTemplate::parse(ikigai_fs::FILE_TEMPLATE).expect("FILE_TEMPLATE is a valid template");
+        let kernel = Kernel::new(Arc::new(EndpointSpace::new().bind(grammar, files)));
         Ok(Objects { root, kernel })
     }
 
@@ -86,6 +91,19 @@ impl Objects {
     /// Run `verb` on `rel` inside the jail, holding read, write and delete on the jail's root
     /// only. A path outside the jail is refused whatever the capability.
     fn issue(&self, verb: Verb, rel: &str, args: Vec<(&str, Vec<u8>)>) -> Result<Representation, Error> {
+        let repr = block_on(self.issue_body(verb, rel, args))?;
+        let bytes = repr.bytes.as_bytes().cloned().ok_or_else(|| Error::Endpoint("a streamed answer".into()))?;
+        Ok(Representation::new(repr.repr_type, bytes))
+    }
+
+    /// `issue`, answering the body as the endpoint produced it, so a file reads past the run's
+    /// byte budget.
+    async fn issue_body(
+        &self,
+        verb: Verb,
+        rel: &str,
+        args: Vec<(&str, Vec<u8>)>,
+    ) -> Result<Representation<Body>, Error> {
         let iri = Iri::parse(&format!("urn:file:{rel}"))
             .map_err(|e| Error::InvalidArgument { name: "path".into(), detail: e.to_string() })?;
         let mut request = Request::new(verb, iri);
@@ -93,7 +111,7 @@ impl Objects {
             request = request.with_arg(name, ArgRef::Inline(value));
         }
         let held = Capability::scoped(["urn:cap:fs:read:.", "urn:cap:fs:write:.", "urn:cap:fs:delete:."]);
-        block_on(self.kernel.issue(request, &held))
+        self.kernel.issue_body(request, &held).await
     }
 
     /// Keep `bytes` and return their content address. Content already stored is not written
@@ -122,8 +140,16 @@ impl Objects {
     /// The bytes stored under `id`, if any.
     pub fn get(&self, id: &ContentId) -> io::Result<Option<Vec<u8>>> {
         let args = vec![("as", b"application/octet-stream".to_vec())];
-        match self.issue(Verb::Source, &Self::relative(id), args) {
-            Ok(repr) => Ok(Some(repr.bytes.to_vec())),
+        let read = async {
+            let repr = self.issue_body(Verb::Source, &Self::relative(id), args).await?;
+            // A file answers a body that reads from the file; a buffer is a directory's listing.
+            if matches!(repr.bytes, Body::Bytes(_)) {
+                return Err(Error::Endpoint(format!("{} is not a file", Self::relative(id))));
+            }
+            Ok(repr.bytes.collect(usize::MAX).await?.to_vec())
+        };
+        match block_on(read) {
+            Ok(bytes) => Ok(Some(bytes)),
             Err(Error::NotFound(_)) => Ok(None),
             Err(e) => Err(io_error(e)),
         }
