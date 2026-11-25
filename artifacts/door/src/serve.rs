@@ -580,8 +580,13 @@ mod tests {
     #[test]
     fn a_caller_on_the_doors_socket_is_answered_each_resources_description() {
         let (kernel, _threads) = door("describe-socket");
-        let path = std::env::temp_dir().join(format!("roc-door-describe-{}.sock", std::process::id()));
-        let _ = std::fs::remove_file(&path);
+        // A directory of this user's alone, as the state directory is: ikigai-ipc refuses to
+        // bind a socket straight in a shared directory such as `/tmp`.
+        let dir = std::env::temp_dir().join(format!("roc-door-describe-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(&dir).unwrap();
+        std::fs::set_permissions(&dir, std::os::unix::fs::PermissionsExt::from_mode(0o700)).unwrap();
+        let path = dir.join("door.sock");
         let serving = Arc::new(kernel);
         let serve_path = path.clone();
         std::thread::spawn(move || ikigai_ipc::serve_shared(serving, &serve_path));
