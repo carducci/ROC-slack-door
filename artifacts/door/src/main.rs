@@ -61,6 +61,12 @@ fn run(config: Config) -> ExitCode {
         eprintln!("roc-slack-door: cannot create the state directory: {e}");
         return ExitCode::from(2);
     }
+    // The mode above reaches only a directory made now; one a previous start made keeps its own.
+    let private = std::os::unix::fs::PermissionsExt::from_mode(0o700);
+    if let Err(e) = std::fs::set_permissions(&config.state_dir, private) {
+        eprintln!("roc-slack-door: cannot make the state directory private: {e}");
+        return ExitCode::from(2);
+    }
 
     let (events_tx, events_rx) = mpsc::channel();
     let app_token = config.app_token.clone();
