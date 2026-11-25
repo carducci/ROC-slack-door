@@ -104,6 +104,8 @@ fn run(config: Config) -> ExitCode {
         if let Err(e) = ikigai_ipc::serve_shared(serving, &serve_path) {
             eprintln!("roc-slack-door: the socket stopped serving: {e}");
         }
+        // A door with no socket has nothing to mount: stop, so the service manager sees it.
+        std::process::exit(1);
     });
 
     loop {
