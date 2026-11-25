@@ -61,7 +61,7 @@ fn to_error(error: ThreadError) -> Error {
             Error::NotFound("no-file: this channel never received that file".to_owned())
         }
         ThreadError::Refused(Refusal::NotGranted(scope)) => {
-            Error::Denied(format!("not-granted: this call needs `{scope}`"))
+            Error::Denied(format!("not-granted: this call needs `{scope}`").into())
         }
         ThreadError::Unavailable { retry_after_secs } => Error::Unavailable(match retry_after_secs {
             Some(secs) => format!("Slack is busy; retry after {secs}s"),
