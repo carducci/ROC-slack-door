@@ -723,6 +723,17 @@ dependencies = [
 ]
 
 [[package]]
+name = "ikigai-sniff"
+version = "0.6.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "58f3522e3e8abd2c8d5570b122d237266b0d63758786871f6ace4592fd3f4025"
+dependencies = [
+ "async-trait",
+ "futures-util",
+ "ikigai-core",
+]
+
+[[package]]
 name = "ikigai-store"
 version = "0.6.2"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -1289,6 +1300,7 @@ name = "roc-slack-door"
 version = "0.0.0"
 dependencies = [
  "ikigai-core",
+ "ikigai-sniff",
  "serde_json",
 ]
 
