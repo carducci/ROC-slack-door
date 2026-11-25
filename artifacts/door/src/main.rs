@@ -54,7 +54,10 @@ fn main() -> ExitCode {
 /// the kernel on `door.sock` in the state directory, and the inbox loop that writes deliveries
 /// through that kernel.
 fn run(config: Config) -> ExitCode {
-    if let Err(e) = std::fs::create_dir_all(&config.state_dir) {
+    // Private whatever the umask: ikigai-ipc refuses to serve a socket others can replace.
+    let mut state_dir = std::fs::DirBuilder::new();
+    std::os::unix::fs::DirBuilderExt::mode(state_dir.recursive(true), 0o700);
+    if let Err(e) = state_dir.create(&config.state_dir) {
         eprintln!("roc-slack-door: cannot create the state directory: {e}");
         return ExitCode::from(2);
     }
@@ -104,6 +107,8 @@ fn run(config: Config) -> ExitCode {
         if let Err(e) = ikigai_ipc::serve_shared(serving, &serve_path) {
             eprintln!("roc-slack-door: the socket stopped serving: {e}");
         }
+        // A door with no socket has nothing to mount: stop, so the service manager sees it.
+        std::process::exit(1);
     });
 
     loop {
