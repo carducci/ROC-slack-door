@@ -12,7 +12,9 @@ authors.workspace = true
 name = "roc_slack_door"
 
 [dependencies]
+base64 = "0.22"
 ikigai-core = "=0.4.2"
+ikigai-fs = "0.6"
 ikigai-sniff = "0.6"
 
 [dev-dependencies]
